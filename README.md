@@ -22,8 +22,32 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 
 - ❌ 不是 exactly-once 系统。**它是 at-least-once**，并且这里不打算掩饰这一点（见 [ADR-0002](docs/adr/0002-at-least-once-not-exactly-once.md)）
 - ❌ 不是微服务集群。它是模块化单体，按运行角色（api / relay / worker）启动（见 [ADR-0004](docs/adr/0004-modular-monolith-with-roles.md)）
-- ❌ 没有宣称的 QPS 数字。压测数据在 v0.3 提供，且会附带机器配置与失败率
 - ❌ 不是 Svix / Hookdeck 的替代品，没有生产级 SLA
+- ✅ **但 QPS 数字现在是实测的**，带机器规格、失败率、原始输出和测量方法的缺陷记录（见 [docs/performance.md](docs/performance.md)）
+
+---
+
+## 能扛多少（实测，v0.3）
+
+**这台机器**（i5-14600K 14C/20T、31.7GB、MySQL 8.4 in Docker、`all` profile 单 JVM、payload 2KB、开环压测）：
+
+| 到达率 | 成功率 | p50 | p95 | p99 |
+|---|---|---|---|---|
+| 100 events/s | 100% | 29 ms | 39 ms | 48 ms |
+| **300 events/s** | **100%** | **33 ms** | 48 ms | **111 ms** |
+| 450 events/s | 66%（其余 429） | 36 ms | 636 ms | 750 ms |
+
+**结论：本机稳定 300 events/s（p99 < 500ms）；瓶颈是一次事务一次 fsync 的 DB 提交，不是 CPU、不是 GC、不是连接池。**
+
+三个最能说明问题的数字：
+
+1. **闭环压测会把 p99 低估 11.9 倍**（同一批请求：开环 905ms vs 闭环 229ms）。所以本项目的压测器输出两个视角。
+2. **一个租户的洪水对小租户 p99 的影响：4 584ms → 190ms**，只因为给洪水租户设了并发预算（`max_in_flight`）。
+3. **过载 3 倍时，水位线决定是降级还是雪崩**：水位 10 000 → p99 2.7s、积压 10 258 行；水位 200 → p99 84ms、92% 请求 2.3ms 内被 429、积压 15 秒归零。
+
+完整报告（含 GC 日志、JFR 证据、fsync A/B、**以及测量方法本身犯过的三个错误**）：[docs/performance.md](docs/performance.md)。容量模型与"扩容先加谁"：[docs/capacity.md](docs/capacity.md)。
+
+> README 里出现的每一个数字都对应 `docs/perf/2026-10-22/` 下的一份原始输出。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
 
 ---
 
@@ -240,8 +264,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 47 个单元测试（含 16 个 jqwik 属性测试），秒级，不需要 Docker
-./mvnw verify    # 47 单元 + 20 集成 = 67 个测试，起真实 MySQL 8.4 与 RabbitMQ 4
+./mvnw test      # 73 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
+./mvnw verify    # 73 单元 + 23 集成 = 96 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（约 6 分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -252,11 +276,19 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | `EgressGuardTest` | 回环/私有/链路本地/CGNAT/保留段全部拒绝（对 IPv4 全空间做属性测试）；白名单与演示模式可覆盖 |
 | `SecretCipherTest` | 每次加密用新 IV；篡改密文或换主密钥则解密失败 |
 | `DeliveryStatusTest` | 状态机语义与文档一致 |
+| `WeightedRoundRobinTest` | 3:1 在 40 次内精确 30/10；**轻租户的最大间隔受权重比约束，不随队列长度增长** |
+| `AdmissionControlTest` | 预算边界、endpoint 上限只挡自己、**本地计数在刷新前就已生效**（否则一次会发出整批） |
+| `BacklogGateTest` | 平台级 503 / 租户级 429 分开；`Retry-After`；计数每区间只算一次 |
+| `DeliveryMessageTest` | `traceparent` JSON 往返；**v0.2 的旧 outbox 行仍能解析**（否则升级时最后几行会进 DLQ） |
+| `EndpointPauseRetryTest` | 死锁牺牲者会被重试（见 failures/0007），审计只写一次 |
 | `EventIngestIT` | 20 并发同幂等键 → 1 个事件；扇出过滤；claim 互斥；lease 回收；outbox 唯一键允许下一轮 |
 | `EndToEndDeliveryIT` | 真实链路 2xx/5xx/4xx/replay/pause 五种结局 |
 | `ReceiverFaultIT` | 慢接收方 → `TIMEOUT`；连接被拒 → `CONNECT_ERROR`；故障消失后**同一个** delivery 自动成功 |
 | `BrokerOutageIT` | broker 冻结期间事件仍被接受、不产生任何 attempt、工作停在 outbox；恢复后自动追平且只尝试一次 |
 | `OutboxCrashWindowIT` | 「确认后崩溃」窗口：sweeper 重新武装 → 消息重复 → attempt 护栏吸收，接收方只看到一次尝试 |
+| `FairnessIT` | 同一场景跑两遍，只改洪水租户的并发预算：受害租户 p99 **4 584ms → 190ms** |
+| `BackpressureIT` | 真实 HTTP：积压超水位 → `429` + `Retry-After`；恢复后已接受的事件全部投递成功、租户被重新放行 |
+| `TracingIT` | 接收方收到的 `traceparent` 与 API 返回的 `X-HookFlow-Trace-Id` 是**同一个 trace**（5 跳一条链路） |
 
 **为什么坚持用容器而不是 H2**：`FOR UPDATE SKIP LOCKED`、JSON 列、CHECK 约束、quorum queue 这些行为在替代品里都不一样。更重要的是——下面三个真实缺陷只有"真实 MySQL + 真实 RabbitMQ + 与数据库不同时区的 JVM"才能暴露，H2 同进程跑会全部掩盖：
 
@@ -265,8 +297,9 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | 0001 | 并发幂等时输掉竞争的一方返回 500（REPEATABLE READ 快照看不到赢家） | [docs/failures/0001](docs/failures/0001-idempotent-race-snapshot.md) |
 | 0002 | 重试永不触发（JVM 是 UTC+8，MySQL 是 UTC，两个时钟被拿来比较） | [docs/failures/0002](docs/failures/0002-two-clocks.md) |
 | 0003 | broker 停机时 outbox 行卡在 PUBLISHING（异常类型没被接住） | [docs/failures/0003](docs/failures/0003-publisher-send-outside-try.md) |
+| 0007 | 批量取消（暂停端点）与逐行认领相互死锁——**只有把并发量提到 1 500 行才会出现** | [docs/failures/0007](docs/failures/0007-cancel-vs-claim-deadlock.md) |
 
-这三个文档比任何功能列表都更能说明这个项目被真正跑过。
+这四个文档比任何功能列表都更能说明这个项目被真正跑过。
 
 ## 故障演练（真实进程，真实依赖故障）
 
@@ -301,8 +334,29 @@ GET /actuator/prometheus
 | `hookflow.delivery.retry_scheduled` | 进入重试的投递数 |
 | `hookflow.delivery.dead` | 进入死信的投递数 |
 | `hookflow.delivery.duplicate_skipped` | 被 attempt 护栏挡下的重复消息数（**这个数字大于 0 是正常的**，说明护栏在工作） |
-| `hookflow.outbox.published` / `publish_failed` / `recovered` | relay 链路健康度 |
+| `hookflow.outbox.published` / `publish_failed` / `publish_rejected` / `recovered` | relay 链路健康度（`publish_rejected` = broker 队列撞到长度上限，积压留在 MySQL） |
 | `hookflow.recovery.retry_enqueued` / `lease_reclaimed` / `stuck_requeued` | 恢复路径被触发的次数 |
+| `hookflow.fairness.admitted` / `skipped_over_budget` | 调度器放行/跳过（v0.3） |
+| `hookflow.ingest.shed{scope=tenant\|platform}` | 入口降载次数，按"租户自己的问题"和"平台的问题"分开 |
+| `hookflow.outbox.backlog` | 未发布积压（gauge），**容量规划与告警的主指标** |
+| `hookflow.worker.over_capacity{policy}` | worker 收到的消息超过租户/端点预算 |
+
+### 分布式 trace（v0.3）
+
+一次投递横跨 api → outbox → relay → MQ → worker → 接收方。默认**不导出**（`mvn verify` 不能依赖 collector），打开方式：
+
+```bash
+docker compose --profile tracing up -d      # Jaeger UI: http://localhost:16686
+./mvnw spring-boot:run \
+  -Dspring-boot.run.arguments="--management.otlp.tracing.export.enabled=true"
+```
+
+```
+api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.delivery  →  hookflow.receiver（出站 POST）
+```
+
+每个 API 响应都带 `X-HookFlow-Trace-Id`；接收方收到的 W3C `traceparent` 是同一个 trace。`TracingIT` 断言这两点。
+本机拉不到 Jaeger 镜像的细节（以及替代证据）见 [docs/operations.md §9](docs/operations.md)。
 
 ---
 
@@ -324,9 +378,19 @@ GET /actuator/prometheus
 | `hookflow.security.egress.allow-private-targets` | **false** | SSRF 防护：默认拒绝回环/私有/链路本地/云元数据地址。仅 `all`（本地演示）profile 打开 |
 | `hookflow.security.egress.allowed-hosts` | `[]` | 显式放行的 host 白名单，优先于范围检查 |
 | `hookflow.relay.retention-days` | 7 | PUBLISHED 的 outbox 行保留天数，0 关闭清理 |
+| `hookflow.relay.max-queue-length` | 20000 | broker 队列长度上限（`reject-publish`）。**改这个值需要删队列**：RabbitMQ 不允许改已声明队列的参数 |
+| `hookflow.fairness.enabled` | true | 公平调度总开关。`false` = v0.2 行为（按 id 发布、无准入），用于对照测量 |
+| `hookflow.fairness.refresh-interval-ms` | 1000 | 在途计数刷新周期；越短预算越紧、查询越多 |
+| `hookflow.worker.over-capacity-policy` | defer | 消息到达时租户/端点已满：`defer`（交给恢复器，最多等一个 stuck-scan 周期）或 `requeue`（立刻退回队列，烧 CPU） |
+| `hookflow.backpressure.outbox-high-watermark` | 100000 | 平台级未发布积压 → `503` + `Retry-After`；0 关闭 |
+| `hookflow.backpressure.tenant-high-watermark` | 10000 | 租户级未发布积压 → `429` + `Retry-After`；**应按"目标等待 × 排空速率"定，不是越大越好**（见 capacity.md） |
+| `hookflow.backpressure.retry-after-seconds` | 5 | 降载响应里的 `Retry-After` |
+| `management.tracing.enabled` | true | 关闭后所有 trace 相关代码退化为 no-op，投递语义不变 |
+| `management.tracing.sampling.probability` | 1.0 | 采样率。**生产第一件事是降下来** |
+| `management.otlp.tracing.export.enabled` | **false** | 是否真的把 span 发出去；默认关闭，测试与生产都不依赖 collector |
 | `hookflow.security.master-key` | 环境变量 | ≥32 字符；**丢失等于所有 endpoint 密钥作废** |
 
-环境变量：`DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` `MQ_HOST` `MQ_PORT` `REDIS_HOST` `REDIS_PORT` `HOOKFLOW_MASTER_KEY` `HOOKFLOW_BOOTSTRAP_TOKEN`。
+环境变量：`DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` `DB_POOL_SIZE` `MQ_HOST` `MQ_PORT` `MQ_CONCURRENCY` `MQ_PREFETCH` `MQ_MAX_QUEUE_LENGTH` `REDIS_HOST` `REDIS_PORT` `HOOKFLOW_MASTER_KEY` `HOOKFLOW_BOOTSTRAP_TOKEN` `FAIRNESS_ENABLED` `OUTBOX_HIGH_WATERMARK` `TENANT_HIGH_WATERMARK` `WORKER_OVER_CAPACITY_POLICY` `TRACING_ENABLED` `TRACING_SAMPLE` `OTLP_EXPORT` `OTLP_ENDPOINT`。
 
 ---
 
@@ -341,6 +405,10 @@ GET /actuator/prometheus
 - [ADR-0005](docs/adr/0005-spring-boot-4-and-java-21.md) — 为什么是 Boot 4.1 + JDK 21
 - [ADR-0006](docs/adr/0006-redis-for-rate-limit-only.md) — 为什么 Redis 只做限流，不存事件状态
 - [ADR-0007](docs/adr/0007-hand-rolled-api-key-auth.md) — 为什么 v0.1 不用 Spring Security
+- [ADR-0008](docs/adr/0008-fault-injection-tooling.md) — 为什么故障注入用容器级操作，放弃 Toxiproxy
+- [ADR-0009](docs/adr/0009-fair-scheduling.md) — 为什么公平调度放在 outbox→broker 边界，而不是分片队列或消费端
+- [ADR-0010](docs/adr/0010-backpressure-and-shedding.md) — 为什么过载时在入口淘汰，而不是在内部排队
+- [ADR-0011](docs/adr/0011-distributed-tracing.md) — 为什么 trace 上下文放进 payload，而不仅是 MQ header
 
 ---
 
@@ -350,20 +418,20 @@ GET /actuator/prometheus
 
 - 单 region、单 MySQL 主库，没有分片
 - 管理端只有 REST，没有 UI；没有 SDK
-- 顺序投递未实现（明确列为「不保证」）
+- 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
-- 无背压、无租户公平调度：一个大租户可以把 worker 线程池占满
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
-- 压测与 JVM 调优数据尚未提供（v0.3）
-- 分布式 trace 尚未贯通（v0.3）
+- `delivery_attempt` 没有保留策略（`outbox` 有）
+- `stale-publishing-seconds` 一个值两用（崩溃窗口 + worker `defer` 延迟），出现真实误判再拆
+- **性能数据只覆盖单机单进程拓扑**，且 wrk2 / async-profiler 两项没有跑成（本机没有二进制、镜像拉取失败），已在 [performance.md §13](docs/performance.md) 明确标注
 
 **规划**：
 
 | 版本 | 内容 | 状态 |
 |---|---|---|
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
-| v0.3 | 多租户公平调度、背压与降载、wrk2 无 coordinated-omission 延迟测量、JFR + 火焰图 + GC 调优数据、OpenTelemetry trace 贯通 | 计划中 |
-| v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK | 计划中 |
+| v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
+| v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK、令牌桶限流 | 计划中 |
 
 ---
 
@@ -372,17 +440,33 @@ GET /actuator/prometheus
 ```
 src/main/java/dev/hookflow/
 ├── api/             REST 控制器、API Key 鉴权过滤器、DTO
+├── backpressure/    入口降载（两级水位 → 429/503 + Retry-After）
 ├── common/          错误码与统一错误体、requestId、principal 上下文
 ├── config/          配置属性、OpenAPI
 ├── crypto/          HMAC 签名、AES-GCM 密钥加密
-├── domain/          tenant / apikey / endpoint / event / delivery / outbox / audit
-├── messaging/       RabbitMQ 拓扑、发布器（publisher confirm）、工作消息
+├── domain/          tenant / apikey / endpoint / event / delivery / outbox / audit / fairness
+├── fairness/        加权轮询、并发预算（准入控制）
+├── messaging/       RabbitMQ 拓扑（含长度上限）、发布器（publisher confirm）、工作消息
 ├── persistence/     MyBatis mapper（所有状态转换都是 CAS）
 ├── ratelimit/       Redis + Lua 的租户限流
-├── relay/           outbox relay、PUBLISHING 卡死回收
+├── relay/           outbox relay（现在是公平调度器）、PUBLISHING 卡死回收
 ├── service/         用例编排（幂等摄入、扇出、重放、暂停）
-├── tools/           演示用假接收方（纯 JDK，无需 Spring）
+├── tools/           假接收方 MockReceiver + 开环压测器 LoadGen（纯 JDK，无需 Spring）
+├── tracing/         W3C traceparent 传播、trace id 回显
 └── worker/          投递执行、lease 守护、重试/回收调度、退避算法
+
+docs/
+├── adr/             11 条架构决策（含本轮新增 0009/0010/0011）
+├── failures/        真实缺陷复盘与演练记录（含本轮新增 0007）
+├── perf/            压测原始输出（报告引用的唯一来源）
+├── performance.md   性能报告：方法、数据、瓶颈、优化前后对比
+├── capacity.md      容量模型：4C8G 能扛多少、先加谁
+└── v0.3-checklist.md 本轮验收清单（哪些做了、哪些没做、为什么）
+
+scripts/
+├── bench.ps1        压测入口（GC 日志 + JFR + 指标 + 清库）
+├── drill.ps1        故障演练（真杀进程）
+└── demo.ps1 / demo.sh  一键演示
 ```
 
 ---

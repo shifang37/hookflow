@@ -184,11 +184,12 @@ class EventIngestIT extends AbstractIntegrationTest {
                 ingestService.ingest(tenantId, "order.paid", "{}", "outbox-" + UUID.randomUUID());
         long deliveryId = deliveryMapper.list(tenantId, result.eventId(), null, 10, 0).getFirst().id();
 
-        assertThatThrownBy(() -> outboxMapper.insert("DELIVERY", deliveryId, 1, "{\"attemptNo\":1}"))
+        assertThatThrownBy(() -> outboxMapper.insert("DELIVERY", deliveryId, 1,
+                "{\"attemptNo\":1}", tenantId, 1L))
                 .as("a second row for the same attempt must violate the unique key")
                 .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
 
-        assertThat(outboxMapper.insert("DELIVERY", deliveryId, 2, "{\"attemptNo\":2}"))
+        assertThat(outboxMapper.insert("DELIVERY", deliveryId, 2, "{\"attemptNo\":2}", tenantId, 1L))
                 .as("the next attempt must still be schedulable")
                 .isEqualTo(1);
     }

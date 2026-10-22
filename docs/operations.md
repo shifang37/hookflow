@@ -24,7 +24,15 @@ java -jar hookflow.jar --spring.profiles.active=worker
 | `relay` | ✅ | ✅ | — | ✅ 靠 `SKIP LOCKED` |
 | `worker` | ✅ | ✅ | — | ✅ 靠 lease + attempt 护栏 |
 
-**扩容顺序建议**：先加 `worker`（外部接收方延迟是主要瓶颈），再加 `api`，`relay` 最后。
+**扩容顺序建议**（v0.3 改口）：**先看指标，不要凭顺序加机器。** 判断表见 [capacity.md §4](capacity.md)：
+
+- `hikaricp_connections_pending > 0` → 加连接池（本机实测恒为 0，加池子没有收益）
+- p99 随速率上升但连接池空闲 → 瓶颈在 DB 提交，改提交策略或换盘，**加 api 实例没用**
+- outbox 积压涨、worker 空闲 → 加 relay
+- 接收方慢（p99 由接收方决定）→ 加 worker，**并且同时调大该租户的 `max_in_flight`**，否则预算才是上限
+- 接收方自己也扛不住并发 → 给它设 `endpoint.max_concurrency`，别让它拖住整个租户
+
+v0.2 的建议是"先加 worker"，那是基于"接收方延迟是主要瓶颈"的假设；实测显示**默认配置下 DB 提交先咬合**，所以顺序取决于负载形态，而不是固定的。
 
 ## 2. 依赖故障时的行为
 
@@ -47,12 +55,19 @@ java -jar hookflow.jar --spring.profiles.active=worker
 | 指标 | 阈值建议 | 含义 |
 |---|---|---|
 | `hookflow.outbox` 中 `status='NEW'` 的数量 | > 10000 持续 5 分钟 | relay 跟不上或 broker 异常 |
-| `hookflow.delivery.dead` 速率 | > 基线 3 倍 | 客户接收方大面积故障 |
-| `hookflow.delivery.retry_scheduled` 速率 | 突增 | 同上 |
-| `hookflow.recovery.lease_reclaimed` | 持续 > 0 | worker 在被杀或卡住，检查 GC / 线程池 |
-| `hookflow.recovery.stuck_requeued` | 持续 > 0 | 有消息在 broker 层丢失，检查 MQ 稳定性 |
-| `hookflow.consumer.poison` | > 0 | 有无法解析的消息，检查发布端 |
-| `hookflow.outbox.corrupt` | > 0 | outbox payload 损坏，**需要人工检查** |
+| `hookflow_outbox_backlog`（v0.3 gauge，`NEW+PUBLISHING`） | 超过租户水位线 | **降载的触发量**，同时是容量规划的主指标 |
+| `hookflow_delivery_dead` 速率 | > 基线 3 倍 | 客户接收方大面积故障 |
+| `hookflow_delivery_retry_scheduled` 速率 | 突增 | 同上 |
+| `hookflow_recovery_lease_reclaimed` | 持续 > 0 | worker 在被杀或卡住，检查 GC / 线程池 |
+| `hookflow_recovery_stuck_requeued` | 持续 > 0 | 有消息在 broker 层丢失，检查 MQ 稳定性 |
+| `hookflow_consumer_poison` | > 0 | 有无法解析的消息，检查发布端 |
+| `hookflow_outbox_corrupt` | > 0 | outbox payload 损坏，**需要人工检查** |
+| `hookflow_ingest_shed_total{scope="tenant"}` | 持续 > 0 | 有租户在被限流（42902）。**这是租户自己的问题**，不会影响别人 |
+| `hookflow_ingest_shed_total{scope="platform"}` | > 0 | 平台在降载（50301）。这是**全平台**问题，应直接告警 |
+| `hookflow_outbox_publish_rejected_total` | 持续 > 0 | broker 队列撞到 `x-max-length`。积压都在 MySQL 里，没有丢，但要检查 relay 是否空转 |
+| `hookflow_fairness_skipped_over_budget_total` | 持续 > 0 | 调度器跳过了超预算的行。正常现象，用来判断是"预算在起作用"还是"预算定小了" |
+| `hookflow_worker_over_capacity_total{policy}` | 持续 > 0 | worker 收到的消息超过租户/端点预算。若持续出现，说明 `refresh-interval-ms` 太长或有人手工绕过了 relay |
+| `hikaricp_connections_pending` | 长期 > 0 | **连接池是瓶颈**，加池子或加只读副本（见 capacity.md §4） |
 
 ### 正常的"看起来像故障"的指标
 
@@ -101,7 +116,32 @@ curl -X POST localhost:8080/v1/endpoints/7/pause -H "Authorization: Bearer $TOKE
 ```
 
 效果：新事件不再为它创建 delivery；已有的 `PENDING`/`RETRY_WAIT` 变为 `CANCELED`。
-**注意：`CANCELED` 是终态，resume 不会复活它们。** 如需补投，请对具体 delivery 重放（当前不支持重放 CANCELED，需 v0.2 补）。
+**注意：`CANCELED` 是终态，resume 不会复活它们。** 如需补投，请对具体 delivery 重放（当前不支持重放 CANCELED）。
+
+**并发坑（v0.3 发现，见 [failures/0007](failures/0007-cancel-vs-claim-deadlock.md)）**：这个操作是"按 endpoint_id 批量 UPDATE"，与 worker 的"按主键逐行认领"加锁顺序相反，在高并发下会被 InnoDB 选为死锁牺牲者。`EndpointService.pause` 已做**事务级重试（3 次，递增退避）**，所以对操作者是透明的；但如果以后新增任何"按维度批量改状态"的运维操作，**必须同样加重试**，否则它会在压力下随机失败。
+
+### 调整一个租户的并发预算
+
+```sql
+-- 直接改库（当前没有 API）：maxInFlight 是"同时在投递中的条数上限"
+UPDATE tenant SET max_in_flight = 200, weight = 1 WHERE id = 7;
+```
+
+生效延迟 ≤ `hookflow.fairness.refresh-interval-ms`（默认 1s）。
+
+定值方法：**目标等待时间 × 排空速率**。排空速率 ≈ `worker 并发 ÷ 接收方延迟`。
+例：8 个 worker、接收方 100ms → 80/s；想让它最多等 500ms → `max_in_flight = 40`。
+把它设成 `0` 等于放弃隔离（回到 v0.2：一个大租户可以吃掉整个队列）。
+
+### 队列长度上限改不了
+
+`hookflow.relay.max-queue-length`（默认 20000）是**队列声明参数**。RabbitMQ 拒绝对已存在的队列改参数，
+本地开发改这个值需要先删队列：
+
+```bash
+docker compose down -v          # 或者：
+docker exec hookflow-rabbitmq rabbitmqctl delete_queue hookflow.delivery
+```
 
 ### 密钥管理
 
@@ -161,3 +201,54 @@ DELETE FROM outbox WHERE status = 'PUBLISHED' AND published_at < NOW() - INTERVA
 - **最多延迟 60s，不会丢**
 
 建议把 K8s `terminationGracePeriodSeconds` 设为 `lease.ttl-seconds + read-timeout` 以上（默认 70s 起步）。
+
+## 9. 分布式 trace（v0.3）
+
+### 打开导出
+
+导出**默认关闭**（`management.otlp.tracing.export.enabled=false`）：`mvn verify` 不能依赖 collector，生产也不能因为 collector 不在而失败。
+
+```bash
+# 本地看 trace：起 collector（可选 profile）
+docker compose --profile tracing up -d          # Jaeger UI: http://localhost:16686
+
+# 让应用把 span 发过去
+./mvnw spring-boot:run \
+  -Dspring-boot.run.arguments="--management.otlp.tracing.export.enabled=true --management.otlp.tracing.endpoint=http://localhost:4318/v1/traces"
+```
+
+采样率 `management.tracing.sampling.probability` 默认 `1.0`（全采）。**生产上线第一件事就是把它降下来**：
+本项目默认 1.0 是为了演示"链路连通性"，被采样掉的 trace 和断掉的 trace 在排查时无法区分。
+
+### 一条投递在 trace 里长什么样
+
+```
+api            http.server.requests                     (根 span，来自 HTTP 请求)
+ └ relay       hookflow.publish          PRODUCER       (从 outbox 行里的 traceparent 续接)
+    └ worker   hookflow.delivery         CONSUMER       (MQ 消息里恢复父上下文)
+       └       hookflow.receiver         CLIENT         (出站 POST，注入 W3C traceparent)
+```
+
+定位方法：拿 API 响应头 `X-HookFlow-Trace-Id`，或者客户收到的 `traceparent` 第二段，在 Jaeger 里搜这个 trace id。
+耗时分布可以直接读出"排队（publish 之间）、relay、worker 领取、HTTP 调用"各占多少。
+
+### 本机拉不到 Jaeger 镜像（已记录）
+
+在本文的测量机器上，**所有** `jaegertracing/all-in-one` 标签都拉不下来：
+
+```
+failed commit on ref "index-sha256:...": commit failed: "unknown-sha256:..."
+failed size validation: 2840 != 27969: failed precondition
+```
+
+`1.62` 和 `latest` 两个不同 tag 报同样的错，所以这是 Docker daemon 在提交 layer 时失败，不是 tag 写错。
+因此 **"在 Jaeger UI 里看到一条 trace" 这一步在本机没有做**，也不声称做过。替代证据是：
+
+- `TracingIT`：断言接收方收到的 `traceparent` 与 API 返回的 trace id **相同**、span id **不同**（5 跳一条 trace，在真实 HTTP 上）；
+- `DeliveryMessageTest`：traceparent 在 outbox 的 JSON 里往返，且 v0.2 旧行仍可解析。
+
+换一台能拉到镜像的机器，上面两条命令即可复现；collector 不在时投递行为完全不受影响（导出是异步、失败即丢 span）。
+
+### 关闭 tracing 的影响
+
+`management.tracing.enabled=false` 时 `TraceContextSupport` 全部退化为 no-op：不建 span、`DeliveryMessage.traceparent` 为 null、响应里没有 `X-HookFlow-Trace-Id`。**投递语义不变**。

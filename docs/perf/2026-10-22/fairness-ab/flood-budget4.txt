@@ -1,0 +1,30 @@
+=== hookflow loadgen ===
+tag               budget4
+target            http://localhost:8080/v1/events
+model             open loop, fixed rate
+rate              60 req/s
+duration          20s (after 0s warmup)
+senders           2 threads, peak in flight 2
+payload           2030 bytes
+requests          1200
+succeeded         1200 (100.00%)
+failed            0 (0.00%)
+throughput        60.0 req/s
+latency, open loop (coordinated-omission corrected)
+  p50.0     24.68 ms
+  p90.0     35.76 ms
+  p95.0     40.84 ms
+  p99.0     77.47 ms
+  p99.9    102.88 ms
+  p99.99    106.96 ms
+  max     106.96 ms
+latency, closed loop (what a naive tool reports)
+  p50.0     17.16 ms
+  p90.0     26.73 ms
+  p95.0     29.82 ms
+  p99.0     38.44 ms
+  p99.9     83.11 ms
+  p99.99    104.11 ms
+  max     104.11 ms
+p99 inflation     x2.0  (how much a closed-loop tool under-reports at p99)
+=== end ===

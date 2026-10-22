@@ -25,9 +25,13 @@ spring:
     listener:
       simple:
         acknowledge-mode: manual
+        # The listener container *is* the worker thread pool. It is bounded on
+        # purpose: concurrency is the number of attempts in flight, prefetch is
+        # how many extra messages one thread may hold unacknowledged. Together
+        # they decide how much work the broker may push before it must wait.
         prefetch: ${MQ_PREFETCH:8}
-        concurrency: 1
-        max-concurrency: 4
+        concurrency: ${MQ_CONCURRENCY:2}
+        max-concurrency: ${MQ_MAX_CONCURRENCY:8}
         default-requeue-rejected: false
   data:
     redis:
@@ -54,6 +58,26 @@ management:
   metrics:
     tags:
       application: hookflow
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      # 1.0 keeps every trace: this is a demo of *continuity*, and a sampled-out
+      # trace is indistinguishable from a broken one when you are debugging one
+      # customer's slow delivery. A real deployment lowers this first.
+      probability: ${TRACING_SAMPLE:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+      # Exporting is opt-in: unit tests and `mvn verify` must never depend on a
+      # collector being up, and a missing collector must never fail a request.
+      export:
+        enabled: ${OTLP_EXPORT:false}
+    metrics:
+      export:
+        # Prometheus is the metrics path for this project. The OTLP metrics
+        # registry arrives with the tracing starter; leaving it on would try to
+        # push to a collector nobody started.
+        enabled: ${OTLP_METRICS_EXPORT:false}
 
 hookflow:
   delivery:
@@ -76,12 +100,40 @@ hookflow:
     # Prune PUBLISHED rows after this many days; 0 disables pruning.
     retention-days: 7
     retention-interval-ms: 3600000
+    # Broker-side cap on the delivery queue. The outbox is the real backlog, so
+    # the broker queue is only a small pipe; when it fills, RabbitMQ refuses the
+    # publish and the relay puts the row back untouched. That is what turns an
+    # overload into a bounded queue instead of a JVM running out of heap.
+    # NOTE: changing this on an existing queue needs the queue to be recreated
+    # (RabbitMQ refuses an argument change on a declared queue).
+    max-queue-length: ${MQ_MAX_QUEUE_LENGTH:20000}
   retry:
     base-delay-ms: 5000
     max-delay-ms: 3600000
     default-max-attempts: 8
     scan-interval-ms: 1000
     stuck-scan-interval-ms: 30000
+  # --- v0.3: multi-tenant fairness over the outbox -> broker edge -------------
+  fairness:
+    # false = v0.2 behaviour (publish strictly in outbox id order, no admission
+    # control). FairnessIT runs both modes to quantify the starvation ratio.
+    enabled: ${FAIRNESS_ENABLED:true}
+    # How often the scheduler re-reads in-flight counts from MySQL. The budget is
+    # enforced against this snapshot plus the scheduler's own increments.
+    refresh-interval-ms: 1000
+  worker:
+    # defer | requeue | dead - reaction to a message that arrives while its
+    # tenant/endpoint is already at its concurrency budget.
+    over-capacity-policy: ${WORKER_OVER_CAPACITY_POLICY:defer}
+  # --- v0.3: load shedding at the front door ---------------------------------
+  backpressure:
+    # Platform-wide un-published outbox rows above which ingest is shed (503).
+    # 0 disables the platform check (per-tenant shedding still applies).
+    outbox-high-watermark: ${OUTBOX_HIGH_WATERMARK:100000}
+    # Per-tenant un-published backlog above which only that tenant is shed (429).
+    tenant-high-watermark: ${TENANT_HIGH_WATERMARK:10000}
+    retry-after-seconds: 5
+    check-interval-ms: 500
   security:
     # DEV DEFAULT ONLY. Override with HOOKFLOW_MASTER_KEY (32+ chars) anywhere
     # that is not a throwaway local container. Losing it orphans every stored

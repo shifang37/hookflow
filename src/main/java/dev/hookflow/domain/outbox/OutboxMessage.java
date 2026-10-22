@@ -13,6 +13,8 @@ public record OutboxMessage(
         String aggregateType,
         Long aggregateId,
         int attemptNo,
+        Long tenantId,
+        Long endpointId,
         String payload,
         String status,
         LocalDateTime publishingSince,

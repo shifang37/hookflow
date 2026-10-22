@@ -1,0 +1,14 @@
+﻿scenario        api
+rate            300 req/s (open loop)
+duration        30 s (warmup 5 s)
+senders         32
+payload         2048 bytes
+host cpu        Intel(R) Core(TM) i5-14600K, 14C/20T
+host memory     31.7 GiB
+os              Microsoft Windows 11 专业版 build 26200
+java            'C:\Program' is not recognized as an internal or external command,
+jvm args        -Duser.timezone=UTC -Xms512m -Xmx512m -XX:+UseG1GC -Xlog:gc*:file=D:\Code\hookflow\bench-results\20261022-160941-api\gc.log:time,uptime,level,tags -XX:StartFlightRecording=filename=D:\Code\hookflow\bench-results\20261022-160941-api\jfr.jfr,settings=profile,dumponexit=true
+app args        --spring.profiles.active=all --hookflow.security.egress.allow-private-targets=true --hookflow.fairness.refresh-interval-ms=500 --hookflow.relay.interval-ms=200 --server.port=8080
+git             01282f1
+docker          29.6.2
+started         20261022-160941

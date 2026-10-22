@@ -38,8 +38,10 @@ API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
 | 40902 | `ENDPOINT_PAUSED` | 409 | endpoint 已暂停 |
 | 40903 | `ILLEGAL_TRANSITION` | 409 | 状态不允许该操作（如重放非 DEAD 的投递） |
 | 42900 | `RATE_LIMITED` | 429 | 超出租户速率 |
+| 42902 | `TENANT_BACKLOG_EXCEEDED` | 429 | **该租户**未投递积压超过水位线，带 `Retry-After` |
 | 50000 | `INTERNAL` | 500 | 未预期错误（细节只在日志里，用 requestId 查） |
 | 50300 | `DEPENDENCY_UNAVAILABLE` | 503 | 依赖不可用（限流 fail-closed 时的 Redis） |
+| 50301 | `OVER_CAPACITY` | 503 | 平台整体过载，正在降载，带 `Retry-After` |
 
 ---
 
@@ -53,12 +55,18 @@ API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
 curl -X POST localhost:8080/v1/admin/tenants \
   -H 'X-Bootstrap-Token: hookflow-dev-bootstrap-token' \
   -H 'Content-Type: application/json' \
-  -d '{"name":"acme","rateLimit":100}'
+  -d '{"name":"acme","rateLimit":100,"maxInFlight":32,"weight":1}'
 ```
 
 `201` → `{"tenantId":1,"name":"acme","apiKey":"hk_xxxxxxxx_yyyy…","keyPrefix":"xxxxxxxx"}`
 
-`rateLimit` 为每秒事件数，`0` 表示不限速。
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `rateLimit` | 100 | 每秒事件数，`0` 表示不限速 |
+| `maxInFlight` | 32 | **该租户同时在投递中的条数上限**。这是 v0.3 的隔离栅栏：它同时限制了"这个租户能排在别人前面多少条"。`0` = 不限（回到 v0.2 行为，不推荐） |
+| `weight` | 1 | 竞争时的加权轮询权重（1–100）。只影响发布顺序的份额，不放大吞吐 |
+
+`maxInFlight` 的定值方法：**目标等待时间 × 排空速率**。本机实测排空约 300/s，想要 p99 等待 < 500ms，就取 150–200 而不是默认的 32 —— 反过来，机器排空只有 40/s 时（接收方很慢），32 就已经是 800ms 的队头了。见 [capacity.md](capacity.md)。
 
 ### POST /v1/admin/tenants/{tenantId}/keys
 
@@ -80,7 +88,8 @@ curl -X POST localhost:8080/v1/endpoints \
   -d '{
         "url": "https://customer.example/hooks/hookflow",
         "subscribedTypes": "order.paid,order.refunded",
-        "maxAttempts": 8
+        "maxAttempts": 8,
+        "maxConcurrency": 10
       }'
 ```
 
@@ -92,12 +101,15 @@ curl -X POST localhost:8080/v1/endpoints \
   "url": "https://customer.example/hooks/hookflow",
   "subscribedTypes": "order.paid,order.refunded",
   "maxAttempts": 8,
+  "maxConcurrency": 10,
   "status": "ACTIVE",
   "signingSecret": "base64url-32-bytes"
 }
 ```
 
 `subscribedTypes` 支持逗号分隔列表或 `*`（全部）。匹配是**精确匹配**，不是前缀匹配。
+
+`maxConcurrency`（默认 `0` = 不限）：允许打到这个 URL 的**并行调用数上限**。接收方扛不住并发时填它，替代方案是让它把整个租户拖慢——见 [capability 文档](capacity.md) §4 的"接收方慢"一行。
 
 ### GET /v1/endpoints?page=0&size=20
 
@@ -143,6 +155,22 @@ curl -X POST localhost:8080/v1/events \
 - `payload` 必填，任意 JSON
 
 **重试建议**：网络错误时用**同一个** `Idempotency-Key` 重试，不会产生重复事件；返回 200 表示"上次已经成功了"。
+
+**响应头**：
+
+| 头 | 说明 |
+|---|---|
+| `X-Request-Id` | 每个请求都有；出现在日志 MDC 与错误体里 |
+| `X-HookFlow-Trace-Id` | 当前 trace id（tracing 开启时）。拿去 Jaeger 查这条投递的完整链路 |
+| `Retry-After` | **只在降载响应上出现**（`42902` / `50301`），单位秒。不带它退避的客户端会把降载变成重试风暴 |
+
+降载语义：
+
+| 状态码 | 谁的问题 | 客户端该做什么 |
+|---|---|---|
+| `429` `RATE_LIMITED` | 超过租户每秒配额 | 下一整秒再试 |
+| `429` `TENANT_BACKLOG_EXCEEDED` | 该租户自己的未投递积压太高 | 按 `Retry-After` 退避；平台对其他租户仍然健康 |
+| `503` `OVER_CAPACITY` | 平台整体过载 | 按 `Retry-After` 退避；这不是租户的问题 |
 
 ### GET /v1/events/{id}
 
@@ -214,3 +242,15 @@ boolean ok = expected.equals(header("X-HookFlow-Signature"));
 ```
 
 再配合时间戳窗口校验（±300s）和以 `event_id` 为唯一键的幂等写入，接收方就完整了。
+
+## 接收方侧：把 trace 接上（v0.3）
+
+每次投递都带标准 W3C `traceparent` 头：
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+```
+
+如果接收方的服务已经接了 OpenTelemetry / Jaeger，**不需要任何额外配置**，这条 webhook 会自动挂到"触发它的那次 API 调用"的同一条 trace 上——排查"客户说 webhook 慢"时，双方看到的是同一张图。
+
+没有 APM 也能用：把 `traceparent` 的第二个字段（32 位十六进制）和 API 响应头 `X-HookFlow-Trace-Id` 对上，就是同一个 trace。

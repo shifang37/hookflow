@@ -44,10 +44,12 @@ public class EndpointController {
         requireScope(SCOPE);
         EndpointService.CreatedEndpoint created = endpointService.create(
                 ApiKeyPrincipal.Context.requireTenantId(),
-                request.url(), request.subscribedTypes(), request.maxAttempts());
+                request.url(), request.subscribedTypes(), request.maxAttempts(),
+                request.maxConcurrency());
         Endpoint endpoint = created.endpoint();
         return new EndpointCreatedResponse(endpoint.id(), endpoint.url(), endpoint.subscribedTypes(),
-                endpoint.maxAttempts(), endpoint.status(), created.signingSecret());
+                endpoint.maxAttempts(), endpoint.maxConcurrency(), endpoint.status(),
+                created.signingSecret());
     }
 
     @GetMapping
@@ -85,7 +87,8 @@ public class EndpointController {
 
     private static EndpointResponse toResponse(Endpoint endpoint) {
         return new EndpointResponse(endpoint.id(), endpoint.url(), endpoint.subscribedTypes(),
-                endpoint.maxAttempts(), endpoint.status(), endpoint.createdAt());
+                endpoint.maxAttempts(), endpoint.maxConcurrency(), endpoint.status(),
+                endpoint.createdAt());
     }
 
     private void requireScope(String scope) {

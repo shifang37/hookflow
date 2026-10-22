@@ -62,6 +62,9 @@ UPDATE delivery SET status='SUCCEEDED', ...
 | G8 | 慢接收方不会永久占用 worker | connect/read 超时 + lease >> timeout | `serverErrorsAreRetriedUntilExhausted` |
 | G9 | 4xx 不做无意义重试 | 错误分类 | `clientErrorsAreNotRetried` |
 | G10 | 死信可人工重放，且重放保留历史 attempt | `replay` 只加一次额度，不清空计数 | `replayRecoversADeadDelivery` |
+| G11 | 一个租户的积压不会把别的租户饿死，且这一点是量化的 | 租户并发预算 + 加权轮询（ADR-0009） | `FairnessIT`：p99 4 584ms → 190ms |
+| G12 | 过载时拒绝新工作，而不是拖垮已接受的工作 | 入口水位线 + 队列长度上限（ADR-0010） | `BackpressureIT`、`performance.md §8` |
+| G13 | 一条投递的 5 段耗时可以在一个 trace 里看到 | W3C traceparent 贯穿 payload / MQ / 出站请求（ADR-0011） | `TracingIT` |
 
 ### 3.2 平台**不**保证
 
@@ -130,12 +133,19 @@ jitter(x) = x/2 + rand(0, x/2)
 
 **这张表解释了一个常被误解的点**：为什么 broker 丢消息不算事故？因为 broker 里没有权威数据，消息只是"提醒 worker 去看一眼数据库"。
 
-## 7. 容量与背压（v0.1 未完成，供 v0.3 参考）
+## 7. 容量与背压（v0.3 已实现）
 
-当前版本**没有**背压机制，已知缺口：
+v0.1/v0.2 的缺口现在都有了明确答案。**投递语义没有变化，但"接受"的语义变了**：
 
-- outbox 无界增长（只增不删）
-- 队列无最大长度限制
-- 没有按租户的并发隔离：一个大租户可以把 worker 线程池占满
+| 机制 | 行为 | 对语义的影响 |
+|---|---|---|
+| outbox 保留策略 | `PUBLISHED` 行 7 天后批量清理 | 无（`PUBLISHED` 只表示 broker 收到了） |
+| 租户并发预算（`tenant.max_in_flight`） | 一个租户同时在投递中的条数有上限，超出的留在 outbox | 无。**吞吐**被该租户自己的预算限制，**延迟**不再被别人的积压影响 |
+| 端点并发上限（`endpoint.max_concurrency`） | 打到某个 URL 的并行调用有上限 | 无。排队发生在 outbox，仍是 at-least-once |
+| 入口降载（`42902` / `50301`） | 积压超水位时**拒绝新事件**，带 `Retry-After` | **有**：被拒的事件**没有被接受过**，所以 G1 仍然成立（"返回 202 就一定会投递"），但"所有事件都会被接受"不再成立 |
+| broker 队列长度上限 + `reject-publish` | 队列满时 broker 拒绝消息，relay 把行放回 `NEW` | 无。积压回到 MySQL，不丢、不重复 |
+| worker 超预算策略 | `defer`（默认，交给恢复器）/ `requeue`（立刻退回队列） | 无 |
 
-v0.3 计划：outbox 保留策略 + 队列长度上限 + 按 `tenant_id` 的分片队列与加权轮询。
+**一句话**：v0.3 之后，"返回 202" 的承诺变强了（它一定会在有界资源内被投递），而"你提交什么都会被接受"从来不是承诺——现在它有了一个诚实的、可观测的拒绝方式。
+
+容量数字见 [capacity.md](capacity.md)，瓶颈与测量方法见 [performance.md](performance.md)。

@@ -15,16 +15,25 @@ public interface EndpointMapper {
 
     @Insert("""
             INSERT INTO endpoint (tenant_id, url, secret_cipher, secret_key_version,
-                                  subscribed_types, max_attempts, status)
+                                  subscribed_types, max_attempts, max_concurrency, status)
             VALUES (#{tenantId}, #{url}, #{secretCipher}, #{secretKeyVersion},
-                    #{subscribedTypes}, #{maxAttempts}, 'ACTIVE')
+                    #{subscribedTypes}, #{maxAttempts}, #{maxConcurrency}, 'ACTIVE')
             """)
     int insert(@Param("tenantId") long tenantId,
                @Param("url") String url,
                @Param("secretCipher") byte[] secretCipher,
                @Param("secretKeyVersion") short secretKeyVersion,
                @Param("subscribedTypes") String subscribedTypes,
-               @Param("maxAttempts") int maxAttempts);
+               @Param("maxAttempts") int maxAttempts,
+               @Param("maxConcurrency") int maxConcurrency);
+
+    /** Only endpoints that declare a cap; the empty result means "nobody caps". */
+    @Select("""
+            SELECT id, max_concurrency
+              FROM endpoint
+             WHERE status = 'ACTIVE' AND max_concurrency > 0
+            """)
+    List<dev.hookflow.domain.fairness.EndpointCap> listConcurrencyCaps();
 
     @Select("SELECT * FROM endpoint WHERE id = #{id} AND tenant_id = #{tenantId}")
     Optional<Endpoint> findByIdAndTenant(@Param("id") long id, @Param("tenantId") long tenantId);

@@ -13,7 +13,8 @@ public final class Dtos {
     private Dtos() {
     }
 
-    public record CreateEndpointRequest(String url, String subscribedTypes, Integer maxAttempts) {
+    public record CreateEndpointRequest(String url, String subscribedTypes, Integer maxAttempts,
+                                        Integer maxConcurrency) {
     }
 
     public record EndpointResponse(
@@ -21,6 +22,7 @@ public final class Dtos {
             String url,
             String subscribedTypes,
             int maxAttempts,
+            int maxConcurrency,
             String status,
             LocalDateTime createdAt) {
     }
@@ -31,6 +33,7 @@ public final class Dtos {
             String url,
             String subscribedTypes,
             int maxAttempts,
+            int maxConcurrency,
             String status,
             String signingSecret) {
     }
@@ -69,7 +72,8 @@ public final class Dtos {
     public record DeliveryDetailResponse(DeliveryResponse delivery, List<AttemptResponse> attempts) {
     }
 
-    public record ProvisionTenantRequest(String name, Integer rateLimit) {
+    public record ProvisionTenantRequest(String name, Integer rateLimit,
+                                        Integer maxInFlight, Integer weight) {
     }
 
     public record ProvisionTenantResponse(long tenantId, String name, String apiKey, String keyPrefix) {

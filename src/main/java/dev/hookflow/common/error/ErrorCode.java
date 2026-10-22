@@ -19,8 +19,19 @@ public enum ErrorCode {
     ENDPOINT_PAUSED(40902, HttpStatus.CONFLICT, "Endpoint is paused"),
     ILLEGAL_TRANSITION(40903, HttpStatus.CONFLICT, "Delivery is not in a state that allows this operation"),
     RATE_LIMITED(42900, HttpStatus.TOO_MANY_REQUESTS, "Tenant rate limit exceeded"),
+    /**
+     * This tenant's own un-published backlog is above its watermark, so accepting
+     * more would only make its queue longer. Only this tenant is affected.
+     */
+    TENANT_BACKLOG_EXCEEDED(42902, HttpStatus.TOO_MANY_REQUESTS, "Tenant backlog limit exceeded"),
     INTERNAL(50000, HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error"),
-    DEPENDENCY_UNAVAILABLE(50300, HttpStatus.SERVICE_UNAVAILABLE, "Dependent service is unavailable");
+    DEPENDENCY_UNAVAILABLE(50300, HttpStatus.SERVICE_UNAVAILABLE, "Dependent service is unavailable"),
+    /**
+     * The platform as a whole is out of capacity. Shedding here is what keeps
+     * already-accepted events deliverable; the alternative is an out-of-memory
+     * stop that loses nothing but stalls everything.
+     */
+    OVER_CAPACITY(50301, HttpStatus.SERVICE_UNAVAILABLE, "Service is shedding load, retry later");
 
     private final int code;
     private final HttpStatus status;

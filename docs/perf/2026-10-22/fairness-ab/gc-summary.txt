@@ -1,0 +1,1 @@
+pauses=21 totalPauseMs=86.9 maxPauseMs=9.581

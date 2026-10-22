@@ -218,4 +218,28 @@ public interface DeliveryMapper {
                AND status IN ('PENDING', 'RETRY_WAIT')
             """)
     int cancelPendingForEndpoint(@Param("endpointId") long endpointId, @Param("tenantId") long tenantId);
+
+    /**
+     * In-flight counts, the input of every admission decision.
+     *
+     * <p>{@code status = 'DELIVERING'} is range-scanned on {@code idx_delivery_due
+     * (status, next_attempt_at)} and only ever touches rows that are executing
+     * right now — a set bounded by the worker fleet, not by the backlog. That is
+     * why counting them on the scheduler's hot path is affordable.
+     */
+    @Select("""
+            SELECT tenant_id AS id, COUNT(*) AS in_flight
+              FROM delivery
+             WHERE status = 'DELIVERING'
+             GROUP BY tenant_id
+            """)
+    List<dev.hookflow.domain.fairness.InFlight> countInFlightByTenant();
+
+    @Select("""
+            SELECT endpoint_id AS id, COUNT(*) AS in_flight
+              FROM delivery
+             WHERE status = 'DELIVERING'
+             GROUP BY endpoint_id
+            """)
+    List<dev.hookflow.domain.fairness.InFlight> countInFlightByEndpoint();
 }

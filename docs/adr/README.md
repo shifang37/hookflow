@@ -13,6 +13,10 @@
 | [0005](0005-spring-boot-4-and-java-21.md) | Spring Boot 4.1 + JDK 21，不回退 3.5 | 已采纳 |
 | [0006](0006-redis-for-rate-limit-only.md) | Redis 只做限流，不存事件状态 | 已采纳 |
 | [0007](0007-hand-rolled-api-key-auth.md) | v0.1 不用 Spring Security | 已采纳（v0.4 重审） |
+| [0008](0008-fault-injection-tooling.md) | 故障注入用容器级操作与构造状态，放弃 Toxiproxy | 已采纳 |
+| [0009](0009-fair-scheduling.md) | 公平调度放在 outbox → broker 边界（准入 + 加权轮询），不分片队列 | 已采纳 |
+| [0010](0010-backpressure-and-shedding.md) | 过载在入口淘汰（429/503 + Retry-After），内部只设上限 | 已采纳 |
+| [0011](0011-distributed-tracing.md) | trace 上下文进 payload，同时也在 AMQP header；用 W3C 标准 | 已采纳 |
 
 ## 模板
 

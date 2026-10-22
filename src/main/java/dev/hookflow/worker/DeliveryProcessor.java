@@ -6,6 +6,7 @@ import dev.hookflow.domain.delivery.DeliveryAttempt;
 import dev.hookflow.domain.delivery.DeliveryStatus;
 import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.domain.event.Event;
+import dev.hookflow.fairness.AdmissionControl;
 import dev.hookflow.messaging.DeliveryMessage;
 import dev.hookflow.persistence.DeliveryAttemptMapper;
 import dev.hookflow.persistence.DeliveryMapper;
@@ -14,6 +15,7 @@ import dev.hookflow.persistence.EventMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -38,6 +40,7 @@ import java.util.UUID;
  * nothing is silently duplicated.
  */
 @Service
+@Profile({"worker", "all"})
 public class DeliveryProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(DeliveryProcessor.class);
@@ -50,6 +53,7 @@ public class DeliveryProcessor {
     private final TransactionTemplate transactionTemplate;
     private final HookFlowProperties properties;
     private final MeterRegistry meterRegistry;
+    private final AdmissionControl admission;
 
     public DeliveryProcessor(DeliveryMapper deliveryMapper,
                              DeliveryAttemptMapper attemptMapper,
@@ -58,7 +62,8 @@ public class DeliveryProcessor {
                              HttpDeliverer deliverer,
                              TransactionTemplate transactionTemplate,
                              HookFlowProperties properties,
-                             MeterRegistry meterRegistry) {
+                             MeterRegistry meterRegistry,
+                             AdmissionControl admission) {
         this.deliveryMapper = deliveryMapper;
         this.attemptMapper = attemptMapper;
         this.eventMapper = eventMapper;
@@ -67,17 +72,23 @@ public class DeliveryProcessor {
         this.transactionTemplate = transactionTemplate;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
+        this.admission = admission;
     }
 
     /**
      * @return true when the message is done with (handled, superseded, or
-     *         non-retryable), false when the broker should redeliver it
+     *         non-retryable) and may be acknowledged, false when the broker should
+     *         redeliver it immediately
      */
     public boolean process(DeliveryMessage message) {
         Delivery delivery = deliveryMapper.findById(message.deliveryId()).orElse(null);
         if (delivery == null) {
             log.warn("Delivery {} no longer exists, dropping message", message.deliveryId());
             return true;
+        }
+
+        if (!admit(delivery, message)) {
+            return false;
         }
 
         String leaseToken = UUID.randomUUID().toString();
@@ -150,6 +161,46 @@ public class DeliveryProcessor {
                     outcome.statusCode(), outcome.errorClass());
             meterRegistry.counter("hookflow.delivery.retry_scheduled").increment();
         });
+    }
+
+    /**
+     * Worker-side safety net around the scheduler's admission control.
+     *
+     * <p>The relay already refuses to publish past a tenant's concurrency budget,
+     * but the relay's view is a snapshot: a burst can still put a message on the
+     * wire for a tenant that has just filled up. The worker therefore checks the
+     * shared budget once more before claiming, and applies the configured policy.
+     *
+     * <p>The two policies trade latency against CPU and both are measured in
+     * {@code docs/capacity.md}:
+     * <ul>
+     *   <li>{@code defer} (default) — ack and let {@link DeliveryRecovery} re-enqueue
+     *       it. Costs up to one stuck-pending grace window ({@code
+     *       stale-publishing-seconds}, 60s), consumes no CPU while saturated.</li>
+     *   <li>{@code requeue} — hand it back to the broker immediately. Latency stays
+     *       low, but while the budget stays full the message ping-pongs at prefetch
+     *       speed and burns a worker thread budget on refusals.</li>
+     * </ul>
+     *
+     * @return true when the caller may acknowledge (nothing to redeliver)
+     */
+    private boolean admit(Delivery delivery, DeliveryMessage message) {
+        admission.refreshIfStale();
+        if (admission.admit(delivery.tenantId(), delivery.endpointId())) {
+            return true;
+        }
+        HookFlowProperties.Worker config = properties.worker();
+        String policy = config == null || config.overCapacityPolicy() == null
+                ? "defer" : config.overCapacityPolicy().trim().toLowerCase(java.util.Locale.ROOT);
+        meterRegistry.counter("hookflow.worker.over_capacity", "policy", policy).increment();
+        if ("requeue".equals(policy)) {
+            log.debug("Delivery {} is over the tenant/endpoint budget; handing it back",
+                    message.deliveryId());
+            return false;
+        }
+        log.info("Delivery {} is over the tenant/endpoint budget; deferring it to recovery",
+                message.deliveryId());
+        return true;
     }
 
     private void settleAbandoned(long deliveryId, int attemptNo, String reason) {

@@ -1,0 +1,441 @@
+#!/usr/bin/env pwsh
+# Load / fairness bench. Produces a self-describing results directory that a
+# report can quote verbatim: raw load-generator output, GC log, JFR recording,
+# Micrometer counters, MySQL state, and the machine spec the numbers belong to.
+#
+#   .\scripts\bench.ps1 -Scenario api      -Rate 200  -Duration 30
+#   .\scripts\bench.ps1 -Scenario overload -Rate 600  -Duration 30
+#   .\scripts\bench.ps1 -Scenario fairness -Rate 300  -Duration 12
+#
+# Prerequisite: docker compose up -d   (use DB_PUBLISH_PORT if 3306 is taken)
+#               .\mvnw.cmd -DskipTests package
+#
+# English-only on purpose (no non-ASCII) so it runs on any Windows PowerShell
+# without the encoding trap described in docs/v0.3-plan.md.
+#
+# Why there is no --rate in the generator's "closed loop" mode: a closed-loop tool
+# (ab, k6, JMeter) sends the next request only after the previous response, so
+# when the platform slows down the tool slows down too and the queueing delay is
+# never measured (coordinated omission). dev.hookflow.tools.LoadGen sends at a
+# fixed rate and reports both views of the same run, so the error is visible.
+
+param(
+    [ValidateSet('api', 'overload', 'fairness')]
+    [string]$Scenario = 'api',
+    [int]$Rate = 200,
+    [int]$Duration = 30,
+    [int]$Warmup = 5,
+    [int]$Threads = 4,
+    [int]$PayloadBytes = 2048,
+    [int]$DbPort = 13306,
+    [int]$FloodEventsForFairness = 10,
+    [int]$FloodBudget = 4,
+    [int]$ReceiverDelayMs = 0,
+    [int]$VictimDelayMs = 0,
+    [long]$TenantWatermark = 0,
+    [string]$MysqlContainer = 'hookflow-mysql',
+    [string]$JvmTuning = '',
+    [switch]$NoStart
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+# Start-Process builds a child environment and refuses a duplicate proxy variable.
+foreach ($k in @('no_proxy')) {
+    try { [Environment]::SetEnvironmentVariable($k, $null) } catch { }
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$runDir = Join-Path $root "bench-results\$stamp-$Scenario"
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+
+$java = $null
+if ($env:JAVA_HOME) {
+    foreach ($candidate in @('bin\java.exe', 'bin\java', 'java.exe')) {
+        $path = Join-Path $env:JAVA_HOME $candidate
+        if (Test-Path $path) { $java = $path; break }
+    }
+}
+if (-not $java) {
+    $found = Get-Command java -ErrorAction SilentlyContinue
+    if ($found) { $java = $found.Source }
+}
+if (-not $java) { throw 'No java found: set JAVA_HOME or put java on PATH' }
+$classes = Join-Path $root 'target\classes'
+# Newest, not first alphabetically: target/ accumulates jars from older versions and
+# a bench that silently runs the previous release measures the previous release.
+$jarItem = Get-ChildItem (Join-Path $root 'target') -Filter 'hookflow-*.jar' -ErrorAction SilentlyContinue |
+           Where-Object { $_.Name -notmatch 'sources|javadoc' } |
+           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not (Test-Path $classes) -or -not $jarItem) { throw 'Build first: .\mvnw.cmd -DskipTests package' }
+$jar = $jarItem.FullName
+
+$baseUrl = 'http://localhost:8080'
+$receiverPort = 9099
+$bootstrapToken = 'hookflow-dev-bootstrap-token'
+
+# Fixed heap: a bench whose heap size changes between runs measures the heap, not
+# the code. GC logging and JFR are always on so the report has evidence, not just
+# percentages.
+$jvmArgs = @(
+    '-Duser.timezone=UTC',
+    '-Xms512m', '-Xmx512m', '-XX:+UseG1GC',
+    "-Xlog:gc*:file=$runDir\gc.log:time,uptime,level,tags",
+    "-XX:StartFlightRecording=filename=$runDir\jfr.jfr,settings=profile,dumponexit=true"
+)
+if ($JvmTuning) {
+    # For the "did G1 tuning help" A/B: same load, same heap, different collector
+    # knobs. Comma separated so the value never starts with '-' - PowerShell would
+    # read that as another parameter name.
+    foreach ($knob in $JvmTuning.Split(',')) {
+        $jvmArgs += ('-XX:' + $knob.Trim())
+    }
+}
+$appArgs = @(
+    '--spring.profiles.active=all',
+    '--hookflow.security.egress.allow-private-targets=true',
+    '--hookflow.fairness.refresh-interval-ms=500',
+    '--hookflow.relay.interval-ms=200',
+    "--server.port=8080"
+)
+if ($TenantWatermark -gt 0) {
+    # Lowering the per-tenant watermark is how you turn "latency explodes" into
+    # "the platform says no": same arrival rate, different shedding threshold.
+    $appArgs += "--hookflow.backpressure.tenant-high-watermark=$TenantWatermark"
+}
+$receiverQuery = ''
+if ($ReceiverDelayMs -gt 0) {
+    $receiverQuery = "?delay=$ReceiverDelayMs"
+}
+
+function Stamp($msg) { Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $msg) }
+
+# Every process this run starts carries this marker, so cleanup is exact: matching
+# on "HookFlowApplication" stopped working the moment the app was launched with
+# -jar, and a leaked app makes the next run measure the previous one.
+$marker = "-Dhookflow.bench.run=$stamp"
+
+function Get-FloodPids {
+    Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+        Where-Object {
+            $_.CommandLine -and $_.CommandLine.Contains($marker) -and
+            $_.CommandLine.Contains('-Dhookflow.bench.role=flood')
+        } |
+        ForEach-Object { $_.ProcessId }
+}
+
+function Get-AppPid {
+    Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+        Where-Object {
+            $_.CommandLine -and $_.CommandLine.Contains($marker) -and
+            $_.CommandLine.Contains('-jar')
+        } |
+        Select-Object -First 1 -ExpandProperty ProcessId
+}
+
+# JFR's dumponexit never runs: the bench kills the app, and a killed process has no
+# shutdown hook. An explicit dump is the only way the recording is not a 0-byte file.
+function Dump-Jfr {
+    $appPid = Get-AppPid
+    if (-not $appPid) { return }
+    $jcmd = Join-Path (Split-Path $java -Parent) 'jcmd.exe'
+    if (-not (Test-Path $jcmd)) { $jcmd = 'jcmd' }
+    try {
+        & $jcmd $appPid JFR.dump "filename=$runDir\jfr.jfr" 2>&1 | Out-Null
+        Stamp 'JFR recording dumped'
+    } catch {
+        Stamp "could not dump JFR: $($_.Exception.Message)"
+    }
+}
+
+function Stop-Children {
+    Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($marker) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+# Children are started through WMI (Start-Process is unusable here - see the
+# v0.3 plan's environment notes), so every environment variable is written into a
+# tiny .bat instead of being inherited.
+function Start-Background([string]$name, [string]$commandLine) {
+    $bat = Join-Path $runDir "$name.bat"
+    $lines = @('@echo off', "set DB_PORT=$DbPort", "set TZ=UTC", $commandLine)
+    Set-Content -Path $bat -Value $lines -Encoding ASCII
+    Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+        -Arguments @{ CommandLine = 'cmd.exe /c "' + $bat + '"' } | Out-Null
+}
+
+function Wait-Health([int]$timeoutSec = 120) {
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $h = Invoke-RestMethod -Uri "$baseUrl/actuator/health" -TimeoutSec 3
+            if ($h.status -eq 'UP') { return $true }
+        } catch { }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
+function Invoke-Api([string]$method, [string]$path, $body, [hashtable]$headers = @{}) {
+    $req = @{ Method = $method; Uri = "$baseUrl$path"; Headers = $headers; ContentType = 'application/json' }
+    if ($null -ne $body) { $req.Body = ($body | ConvertTo-Json -Depth 8 -Compress) }
+    Invoke-RestMethod @req
+}
+
+function Invoke-Sql([string]$query) {
+    # Native stderr becomes an ErrorRecord, and with ErrorActionPreference=Stop that
+    # throws; a bench helper should surface MySQL's message as text instead.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& docker exec -e MYSQL_PWD=hookflow $MysqlContainer mysql -uhookflow -N -B -e $query 2>&1)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+function Get-Unpublished {
+    $value = Invoke-Sql "SELECT COUNT(*) FROM hookflow.outbox WHERE status IN ('NEW','PUBLISHING')"
+    return ($value | Select-Object -First 1)
+}
+
+# A bench against a database that still holds the previous run's backlog measures
+# the previous run. Foreign keys are switched off for the whole statement batch
+# (session scoped, so it has to be one mysql invocation), which also keeps the
+# delete order from mattering.
+function Reset-Database {
+    $sql = 'SET FOREIGN_KEY_CHECKS=0; ' +
+           'DELETE FROM hookflow.outbox; DELETE FROM hookflow.delivery_attempt; ' +
+           'DELETE FROM hookflow.delivery; DELETE FROM hookflow.event; ' +
+           'DELETE FROM hookflow.audit_log; DELETE FROM hookflow.endpoint; ' +
+           'DELETE FROM hookflow.api_key; DELETE FROM hookflow.tenant; ' +
+           'SET FOREIGN_KEY_CHECKS=1;'
+    Invoke-Sql $sql | Out-Null
+    Stamp 'database reset (deliveries, events, outbox, endpoints, tenants)'
+}
+
+function Get-Percentile([long[]]$values, [double]$p) {
+    if ($values.Count -eq 0) { return 0 }
+    $sorted = $values | Sort-Object
+    $index = [Math]::Ceiling($p / 100.0 * $sorted.Count) - 1
+    if ($index -lt 0) { $index = 0 }
+    return $sorted[$index]
+}
+
+function New-Tenant([string]$label, [int]$maxInFlight) {
+    $body = @{ name = "$label-" + (Get-Date -Format 'HHmmssff'); rateLimit = 0; maxInFlight = $maxInFlight; weight = 1 }
+    return Invoke-Api -method POST -path '/v1/admin/tenants' -body $body `
+        -headers @{ 'X-Bootstrap-Token' = $bootstrapToken }
+}
+
+# ------------------------------------------------------------------ setup ----
+try {
+    if (-not $NoStart) {
+        if (-not $KeepData) { Reset-Database }
+        Stamp 'starting receiver and application'
+        Start-Background 'receiver' ('"' + $java + '" ' + $marker + ' -cp "' + $classes +
+            '" dev.hookflow.tools.MockReceiver ' +
+            $receiverPort + ' "" quiet > "' + $runDir + '\receiver.log" 2>&1')
+        Start-Background 'app' ('"' + $java + '" ' + $marker + ' ' + ($jvmArgs -join ' ') + ' -jar "' + $jar +
+            '" ' + ($appArgs -join ' ') + ' > "' + $runDir + '\app.log" 2>&1')
+        if (-not (Wait-Health)) { throw "application never became healthy - see $runDir\app.log" }
+        Stamp 'application is UP'
+    }
+
+    $outboxUnpublished = Get-Unpublished
+    Write-Host "outbox backlog before the run: $outboxUnpublished"
+
+    switch ($Scenario) {
+        'api' {
+            $tenant = New-Tenant 'bench' 0
+            Invoke-Api -method POST -path '/v1/endpoints' -headers @{ Authorization = "Bearer $($tenant.apiKey)" } `
+                -body @{ url = "http://127.0.0.1:$receiverPort/hook$receiverQuery"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
+            Stamp "tenant $($tenant.tenantId) provisioned (rate limit disabled: measuring capacity, not quota)"
+
+            $loadgen = Join-Path $runDir 'loadgen.txt'
+            & $java -cp $classes dev.hookflow.tools.LoadGen `
+                --url "$baseUrl/v1/events" --api-key $tenant.apiKey `
+                --rate $Rate --duration $Duration --warmup $Warmup --threads $Threads `
+                --payload-bytes $PayloadBytes --tag $Scenario `
+                --timeline (Join-Path $runDir 'timeline.csv') 2>&1 | Tee-Object -FilePath $loadgen
+        }
+        'overload' {
+            $tenant = New-Tenant 'overload' 0
+            Invoke-Api -method POST -path '/v1/endpoints' -headers @{ Authorization = "Bearer $($tenant.apiKey)" } `
+                -body @{ url = "http://127.0.0.1:$receiverPort/hook$receiverQuery"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
+            Stamp "tenant $($tenant.tenantId) provisioned; arrival rate is $Rate req/s"
+
+            $loadgen = Join-Path $runDir 'loadgen.txt'
+            & $java -cp $classes dev.hookflow.tools.LoadGen `
+                --url "$baseUrl/v1/events" --api-key $tenant.apiKey `
+                --rate $Rate --duration $Duration --warmup $Warmup --threads $Threads `
+                --payload-bytes $PayloadBytes --tag $Scenario `
+                --timeline (Join-Path $runDir 'timeline.csv') 2>&1 | Tee-Object -FilePath $loadgen
+            Stamp "outbox backlog right after the run: $(Get-Unpublished)"
+            Start-Sleep -Seconds 15
+            Stamp "outbox backlog 15s later (did it die or did it drain?): $(Get-Unpublished)"
+        }
+        'fairness' {
+            $results = @()
+            foreach ($budget in @($FloodBudget, 0)) {
+                $label = "budget$budget"
+                Stamp "=== fairness run: flood tenant max_in_flight=$budget ==="
+                $flood = New-Tenant 'flood' $budget
+                $victim = New-Tenant 'victim' 32
+                # The flood tenant's receiver is slow so deliveries queue up; the
+                # victim's is fast so its measured latency is (almost) purely the time
+                # it spends waiting behind somebody else's queue. That separation is
+                # the whole point of the drill.
+                Invoke-Api -method POST -path '/v1/endpoints' `
+                    -headers @{ Authorization = "Bearer $($flood.apiKey)" } `
+                    -body @{ url = "http://127.0.0.1:$receiverPort/hook$receiverQuery"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
+                Invoke-Api -method POST -path '/v1/endpoints' `
+                    -headers @{ Authorization = "Bearer $($victim.apiKey)" } `
+                    -body @{ url = "http://127.0.0.1:$receiverPort/hook?delay=$VictimDelayMs"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
+
+                $floodLog = Join-Path $runDir "flood-$label.txt"
+                Start-Background "flood-$label" ('"' + $java + '" ' + $marker +
+                    ' -Dhookflow.bench.role=flood -cp "' + $classes +
+                    '" dev.hookflow.tools.LoadGen --url "' + $baseUrl + '/v1/events" --api-key ' + $flood.apiKey +
+                    ' --rate ' + $Rate + ' --duration ' + $Duration + ' --warmup 0 --threads ' + $Threads +
+                    ' --payload-bytes ' + $PayloadBytes + ' --tag ' + $label + ' > "' + $floodLog + '" 2>&1')
+
+                Start-Sleep -Seconds 2
+                $victimIds = @()
+                foreach ($i in 1..$FloodEventsForFairness) {
+                    $r = Invoke-Api -method POST -path '/v1/events' `
+                        -headers @{ Authorization = "Bearer $($victim.apiKey)";
+                                    'Idempotency-Key' = "victim-$label-$i-" + [guid]::NewGuid().ToString('N') } `
+                        -body @{ eventType = 'load.gen'; payload = @{ n = $i } }
+                    $victimIds += $r.eventId
+                }
+                Stamp "$($victimIds.Count) victim events submitted while the flood is running"
+
+                # Let the generator finish first: its own output is evidence, and a
+                # still-running flood would keep creating deliveries after we cancel.
+                $floodDeadline = (Get-Date).AddSeconds($Duration + 60)
+                while ((Get-Date) -lt $floodDeadline) {
+                    if (-not (Get-FloodPids)) { break }
+                    Start-Sleep -Milliseconds 500
+                }
+
+                # Wait for the victim's deliveries to settle. Their end-to-end
+                # latency is the measurement; the flood is only background load.
+                $deadline = (Get-Date).AddSeconds(120)
+                $stillPending = -1
+                while ((Get-Date) -lt $deadline) {
+                    $stillPending = [int](Invoke-Sql ("SELECT COUNT(*) FROM hookflow.delivery WHERE tenant_id=" +
+                        $victim.tenantId + " AND status IN ('PENDING','DELIVERING','RETRY_WAIT')"))
+                    if ($stillPending -eq 0) { break }
+                    Start-Sleep -Milliseconds 500
+                }
+                if ($stillPending -ne 0) {
+                    throw "victim deliveries did not settle within 120s ($stillPending still open) - a 0 ms result would be a lie"
+                }
+
+                $idList = ($victimIds -join ',')
+                $raw = Invoke-Sql ("SELECT TIMESTAMPDIFF(MICROSECOND, created_at, updated_at) " +
+                    "FROM hookflow.delivery WHERE tenant_id=" + $victim.tenantId +
+                    " AND event_id IN (" + $idList + ") AND status = 'SUCCEEDED'")
+                $latencies = @()
+                foreach ($line in $raw) { if ($line -match '^\d+$') { $latencies += [long]([long]$line / 1000) } }
+                $maxMs = 0
+                if ($latencies.Count -gt 0) { $maxMs = ($latencies | Measure-Object -Maximum).Maximum }
+
+                $summary = [pscustomobject]@{
+                    budget       = $budget
+                    victimEvents = $latencies.Count
+                    p50Ms        = Get-Percentile $latencies 50
+                    p95Ms        = Get-Percentile $latencies 95
+                    p99Ms        = Get-Percentile $latencies 99
+                    maxMs        = $maxMs
+                    floodPending = (Invoke-Sql ("SELECT COUNT(*) FROM hookflow.delivery WHERE tenant_id=" +
+                        $flood.tenantId + " AND status IN ('PENDING','DELIVERING','RETRY_WAIT')"))
+                }
+                $results += $summary
+                Stamp ("FAIRNESS[" + $label + "] n=" + $summary.victimEvents + " p50=" + $summary.p50Ms +
+                    "ms p95=" + $summary.p95Ms + "ms p99=" + $summary.p99Ms + "ms max=" + $summary.maxMs +
+                    "ms floodStillQueued=" + $summary.floodPending)
+
+                # Clean up instead of draining: cancel the flood's queued deliveries and
+                # drop its pending outbox rows, otherwise the next run inherits them and
+                # measures the previous run.
+                Invoke-Sql ("UPDATE hookflow.delivery SET status='CANCELED' WHERE tenant_id=" +
+                    $flood.tenantId + " AND status IN ('PENDING','RETRY_WAIT')") | Out-Null
+                Invoke-Sql ("DELETE FROM hookflow.outbox WHERE tenant_id IN (" + $flood.tenantId +
+                    "," + $victim.tenantId + ")") | Out-Null
+                $drainDeadline = (Get-Date).AddSeconds(60)
+                while ((Get-Date) -lt $drainDeadline) {
+                    $inFlight = [int](Invoke-Sql ("SELECT COUNT(*) FROM hookflow.delivery WHERE tenant_id IN (" +
+                        $flood.tenantId + "," + $victim.tenantId + ") AND status = 'DELIVERING'"))
+                    if ($inFlight -eq 0) { break }
+                    Start-Sleep -Milliseconds 300
+                }
+            }
+            $results | Format-Table -AutoSize | Tee-Object -FilePath (Join-Path $runDir 'fairness.txt')
+            $results | ConvertTo-Json | Set-Content -Path (Join-Path $runDir 'fairness.json') -Encoding UTF8
+        }
+    }
+
+    # ------------------------------------------------------------- evidence --
+    Stamp 'collecting metrics and database state'
+    try {
+        $prom = (Invoke-WebRequest -Uri "$baseUrl/actuator/prometheus" -TimeoutSec 20 -UseBasicParsing).Content
+        $interesting = @('hookflow_outbox_backlog', 'hookflow_outbox_published_total',
+            'hookflow_outbox_publish_failed_total', 'hookflow_outbox_publish_rejected_total',
+            'hookflow_fairness_admitted_total', 'hookflow_fairness_skipped_over_budget_total',
+            'hookflow_ingest_shed_total', 'hookflow_consumer_acked_total', 'hookflow_consumer_requeued_total',
+            'hookflow_delivery_succeeded_total', 'hookflow_delivery_retry_scheduled_total',
+            'hookflow_worker_over_capacity_total',
+            'http_server_requests_seconds', 'jvm_gc_pause_seconds', 'hikaricp_connections')
+        $selected = $prom -split "`n" | Where-Object {
+            $line = $_
+            ($interesting | Where-Object { $line -like "$_*" }).Count -gt 0
+        }
+        $selected | Set-Content -Path (Join-Path $runDir 'metrics.txt') -Encoding UTF8
+    } catch {
+        Stamp "could not read /actuator/prometheus: $($_.Exception.Message)"
+    }
+
+    $db = @(
+        'SELECT status, COUNT(*) FROM hookflow.delivery GROUP BY status ORDER BY status;',
+        'SELECT status, COUNT(*) FROM hookflow.outbox GROUP BY status ORDER BY status;',
+        'SELECT COUNT(*) AS deliveries, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, created_at, updated_at))/1000,1) AS avg_ms FROM hookflow.delivery WHERE status = ''SUCCEEDED'';'
+    ) -join ' '
+    Invoke-Sql $db | Set-Content -Path (Join-Path $runDir 'db.txt') -Encoding UTF8
+
+    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $os = Get-CimInstance Win32_OperatingSystem
+    $meta = @()
+    $meta += "scenario        $Scenario"
+    $meta += "rate            $Rate req/s (open loop)"
+    $meta += "duration        $Duration s (warmup $Warmup s)"
+    $meta += "senders         $Threads"
+    $meta += "payload         $PayloadBytes bytes"
+    $meta += "host cpu        $($cpu.Name), $($cpu.NumberOfCores)C/$($cpu.NumberOfLogicalProcessors)T"
+    $meta += "host memory     $([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)) GiB"
+    $meta += "os              $($os.Caption) build $($os.BuildNumber)"
+    $meta += "java            $((cmd /c "`"$java`" -version 2>&1" | Select-Object -First 1))"
+    $meta += "jvm args        $($jvmArgs -join ' ')"
+    $meta += "app args        $($appArgs -join ' ')"
+    $meta += "git             $(git rev-parse --short HEAD)"
+    $meta += "docker          $(docker version --format '{{.Server.Version}}')"
+    $meta += "started         $stamp"
+    $meta | Set-Content -Path (Join-Path $runDir 'meta.txt') -Encoding UTF8
+
+    Write-Host ''
+    Write-Host "results in $runDir" -ForegroundColor Green
+    Get-ChildItem $runDir | Select-Object Name, Length | Format-Table -AutoSize
+}
+finally {
+    if (-not $NoStart) {
+        Dump-Jfr
+        Stop-Children
+        Write-Host 'bench processes stopped'
+    }
+}
+

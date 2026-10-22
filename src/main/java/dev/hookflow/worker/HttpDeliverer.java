@@ -6,6 +6,9 @@ import dev.hookflow.crypto.SecretCipher;
 import dev.hookflow.domain.delivery.Delivery;
 import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.domain.event.Event;
+import dev.hookflow.tracing.TraceContextSupport;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -44,10 +47,13 @@ public class HttpDeliverer {
     private final HttpClient httpClient;
     private final HookFlowProperties properties;
     private final SecretCipher secretCipher;
+    private final TraceContextSupport traceContext;
 
-    public HttpDeliverer(HookFlowProperties properties, SecretCipher secretCipher) {
+    public HttpDeliverer(HookFlowProperties properties, SecretCipher secretCipher,
+                         TraceContextSupport traceContext) {
         this.properties = properties;
         this.secretCipher = secretCipher;
+        this.traceContext = traceContext;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(properties.delivery().connectTimeoutMs()))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -63,13 +69,35 @@ public class HttpDeliverer {
             int durationMs) {
     }
 
+    /**
+     * One attempt wrapped in its own span, with the trace context injected into
+     * the outbound request as a standard {@code traceparent} header.
+     *
+     * <p>That header is the part a customer can use: if their service is
+     * instrumented, the webhook lands in the same trace as the API call that
+     * caused it, and "why was this delivery slow" stops being a support ticket.
+     */
     public Outcome deliver(Endpoint endpoint, Event event, Delivery delivery, int attemptNo) {
+        Span span = traceContext.startSpan("hookflow.receiver", null);
+        if (span != null) {
+            span.tag("hookflow.endpoint.id", Long.toString(endpoint.id()));
+            span.tag("hookflow.delivery.id", Long.toString(delivery.id()));
+            span.tag("hookflow.attempt", Integer.toString(attemptNo));
+        }
+        try (Tracer.SpanInScope ignored = traceContext.openScope(span)) {
+            return attempt(endpoint, event, delivery, attemptNo);
+        } finally {
+            traceContext.end(span);
+        }
+    }
+
+    private Outcome attempt(Endpoint endpoint, Event event, Delivery delivery, int attemptNo) {
         byte[] secret = secretCipher.decrypt(endpoint.secretCipher());
         byte[] body = buildBody(event, delivery, attemptNo).getBytes(StandardCharsets.UTF_8);
         long timestamp = Instant.now().getEpochSecond();
         String signature = HmacSigner.sign(secret, event.id(), delivery.id(), timestamp, body);
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint.url()))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint.url()))
                 .timeout(Duration.ofMillis(properties.delivery().readTimeoutMs()))
                 .header("Content-Type", "application/json")
                 .header("User-Agent", "HookFlow/0.1")
@@ -79,8 +107,12 @@ public class HttpDeliverer {
                 .header("X-HookFlow-Delivery-Id", Long.toString(delivery.id()))
                 .header("X-HookFlow-Event-Type", event.eventType())
                 .header("X-HookFlow-Attempt", Integer.toString(attemptNo))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        String traceparent = traceContext.currentTraceparent();
+        if (traceparent != null) {
+            builder.header(TraceContextSupport.TRACEPARENT, traceparent);
+        }
+        HttpRequest request = builder.build();
 
         long startNanos = System.nanoTime();
         try {

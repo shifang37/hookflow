@@ -58,6 +58,9 @@ public abstract class AbstractIntegrationTest {
         registry.add("hookflow.retry.base-delay-ms", () -> 200);
         registry.add("hookflow.retry.scan-interval-ms", () -> 200);
         registry.add("hookflow.relay.interval-ms", () -> 100);
+        // A tighter admission refresh keeps the fairness IT from having to wait a
+        // full second before the scheduler sees a budget change.
+        registry.add("hookflow.fairness.refresh-interval-ms", () -> 200);
         // The lease sweeper would race tests that manipulate leases by hand; the
         // tests assert the reclaim semantics explicitly instead.
         registry.add("hookflow.lease.sweep-interval-ms", () -> 3_600_000);

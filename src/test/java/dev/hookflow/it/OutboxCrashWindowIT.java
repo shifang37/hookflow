@@ -94,7 +94,7 @@ class OutboxCrashWindowIT extends AbstractIntegrationTest {
 
         // What actually happened before the crash: the broker received the message.
         DeliveryMessage alreadySent = new DeliveryMessage(scenario.deliveryId(), 1, tenantId,
-                scenario.eventId(), endpointId);
+                scenario.eventId(), endpointId, null);
         publisher.publish(alreadySent);
 
         // Recovery: the sweeper notices the ambiguous PUBLISHING row and re-arms it.
@@ -124,7 +124,7 @@ class OutboxCrashWindowIT extends AbstractIntegrationTest {
     void duplicateMessageIsAbsorbedByTheAttemptFence() {
         Scenario scenario = createScenarioLeavingOutboxInPublishing();
         DeliveryMessage message = new DeliveryMessage(scenario.deliveryId(), 1, tenantId,
-                scenario.eventId(), endpointId);
+                scenario.eventId(), endpointId, null);
 
         // Mark the row published so only the two hand-published messages exist.
         jdbcTemplate.update("UPDATE outbox SET status = 'PUBLISHED', published_at = NOW(3) "
@@ -163,13 +163,14 @@ class OutboxCrashWindowIT extends AbstractIntegrationTest {
         Delivery delivery = deliveryMapper.findByEventAndEndpoint(event.id(), endpointId).orElseThrow();
 
         String payload = objectMapper.writeValueAsString(
-                new DeliveryMessage(delivery.id(), 1, tenantId, event.id(), endpointId));
+                new DeliveryMessage(delivery.id(), 1, tenantId, event.id(), endpointId, null));
         jdbcTemplate.update("""
                         INSERT INTO outbox
-                            (aggregate_type, aggregate_id, attempt_no, payload, status, publishing_since)
-                        VALUES ('DELIVERY', ?, 1, ?, 'PUBLISHING', DATE_SUB(NOW(3), INTERVAL 120 SECOND))
+                            (aggregate_type, aggregate_id, attempt_no, tenant_id, endpoint_id,
+                             payload, status, publishing_since)
+                        VALUES ('DELIVERY', ?, 1, ?, ?, ?, 'PUBLISHING', DATE_SUB(NOW(3), INTERVAL 120 SECOND))
                         """,
-                delivery.id(), payload);
+                delivery.id(), tenantId, endpointId, payload);
 
         return new Scenario(event.id(), delivery.id());
     }

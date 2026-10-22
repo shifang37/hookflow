@@ -72,6 +72,19 @@ public class AdminController {
         tenantMapper.insert(request.name(), rateLimit);
         var tenant = tenantMapper.findByName(request.name())
                 .orElseThrow(() -> new IllegalStateException("tenant insert did not persist"));
+
+        if (request.maxInFlight() != null || request.weight() != null) {
+            int maxInFlight = request.maxInFlight() == null ? tenant.maxInFlight() : request.maxInFlight();
+            int weight = request.weight() == null ? tenant.weight() : request.weight();
+            if (maxInFlight < 0) {
+                throw ApiException.invalid("maxInFlight must be >= 0 (0 = uncapped)");
+            }
+            if (weight < 1 || weight > 100) {
+                throw ApiException.invalid("weight must be between 1 and 100");
+            }
+            tenantMapper.updateBudget(tenant.id(), maxInFlight, weight);
+        }
+
         ApiKeyService.IssuedKey key = apiKeyService.issue(tenant.id(), DEFAULT_SCOPES);
         return new ProvisionTenantResponse(tenant.id(), tenant.name(), key.token(), key.keyPrefix());
     }

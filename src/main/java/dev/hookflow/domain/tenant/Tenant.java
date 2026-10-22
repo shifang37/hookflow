@@ -7,6 +7,8 @@ public record Tenant(
         Long id,
         String name,
         int rateLimit,
+        int maxInFlight,
+        int weight,
         String status,
         LocalDateTime createdAt) {
 
@@ -15,5 +17,10 @@ public record Tenant(
 
     public boolean isActive() {
         return ACTIVE.equals(status);
+    }
+
+    /** {@code 0} means the tenant has no concurrency budget of its own. */
+    public boolean hasConcurrencyBudget() {
+        return maxInFlight > 0;
     }
 }

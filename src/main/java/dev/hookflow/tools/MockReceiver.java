@@ -41,6 +41,15 @@ public final class MockReceiver {
     private static final int HISTORY = 50;
     private static final Deque<String> RECEIVED = new ArrayDeque<>();
 
+    /**
+     * Benchmark mode: no per-request console output.
+     *
+     * <p>Printing one line per webhook is fine for a demo and catastrophic for a
+     * load test — the receiver becomes the bottleneck and the measured throughput
+     * describes System.out, not HookFlow.
+     */
+    private static volatile boolean quiet;
+
     private MockReceiver() {
     }
 
@@ -49,9 +58,13 @@ public final class MockReceiver {
         byte[] secret = args.length > 1 && !args[1].isBlank()
                 ? Base64.getUrlDecoder().decode(args[1])
                 : null;
+        quiet = args.length > 2 && "quiet".equalsIgnoreCase(args[2]);
 
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        server.setExecutor(Executors.newFixedThreadPool(8));
+        // The receiver must be able to take more parallel calls than the worker
+        // pool it is meant to observe, otherwise IT becomes the measured system.
+        server.setExecutor(Executors.newFixedThreadPool(
+                Integer.getInteger("hookflow.mock.threads", 32)));
 
         server.createContext("/hook", exchange -> {
             long start = System.nanoTime();
@@ -87,7 +100,9 @@ public final class MockReceiver {
                     + " ms=" + ((System.nanoTime() - start) / 1_000_000L)
                     + " body=" + abbreviate(new String(body, StandardCharsets.UTF_8));
             remember(record);
-            System.out.println("[MockReceiver] " + record);
+            if (!quiet) {
+                System.out.println("[MockReceiver] " + record);
+            }
 
             byte[] response = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");

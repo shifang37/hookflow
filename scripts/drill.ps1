@@ -35,7 +35,8 @@ foreach ($k in @('no_proxy')) {
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $jarItem = Get-ChildItem (Join-Path $root 'target') -Filter 'hookflow-*.jar' -ErrorAction SilentlyContinue |
-           Where-Object { $_.Name -notmatch 'sources|javadoc' } | Select-Object -First 1
+           Where-Object { $_.Name -notmatch 'sources|javadoc' } |
+           Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $jarItem) { throw 'Build first: .\mvnw.cmd -DskipTests package' }
 $jar = $jarItem.FullName
 $java = Join-Path $env:JAVA_HOME 'bin\java.exe'

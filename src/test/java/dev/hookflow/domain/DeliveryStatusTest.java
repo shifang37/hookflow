@@ -56,6 +56,6 @@ class DeliveryStatusTest {
 
     private static Endpoint endpoint(String subscribedTypes) {
         return new Endpoint(1L, 1L, "http://localhost:9099/hook", new byte[]{1}, (short) 1,
-                subscribedTypes, 8, Endpoint.ACTIVE, null, null);
+                subscribedTypes, 8, 0, Endpoint.ACTIVE, null, null);
     }
 }

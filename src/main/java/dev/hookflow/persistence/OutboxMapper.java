@@ -13,30 +13,63 @@ import java.util.List;
 @Mapper
 public interface OutboxMapper {
 
+    /**
+     * @param tenantId   who owns the delivery; the scheduler's first dimension
+     * @param endpointId where it will be posted; the scheduler's second dimension
+     */
     @Insert("""
-            INSERT INTO outbox (aggregate_type, aggregate_id, attempt_no, payload, status)
-            VALUES (#{aggregateType}, #{aggregateId}, #{attemptNo}, #{payload}, 'NEW')
+            INSERT INTO outbox (aggregate_type, aggregate_id, attempt_no, payload,
+                                tenant_id, endpoint_id, status)
+            VALUES (#{aggregateType}, #{aggregateId}, #{attemptNo}, #{payload},
+                    #{tenantId}, #{endpointId}, 'NEW')
             """)
     int insert(@Param("aggregateType") String aggregateType,
                @Param("aggregateId") long aggregateId,
                @Param("attemptNo") int attemptNo,
-               @Param("payload") String payload);
+               @Param("payload") String payload,
+               @Param("tenantId") long tenantId,
+               @Param("endpointId") long endpointId);
 
     /**
-     * Locks the next batch for exactly one relay instance.
+     * Locks the next batch for exactly one relay instance, skipping the tenants
+     * and endpoints that are already at their concurrency budget.
      *
-     * <p>{@code SKIP LOCKED} is what makes horizontal relay scaling safe: a second
-     * relay steps over rows that are already locked instead of blocking or
-     * re-publishing them.
+     * <p>Two things happen in this one statement, and both are required:
+     *
+     * <ul>
+     *   <li>{@code SKIP LOCKED} lets a second relay step over rows that are
+     *       already locked instead of blocking or re-publishing them.</li>
+     *   <li>{@code NOT IN (blocked)} is what makes the backlog schedulable at
+     *       all. Without it the first {@code limit} rows belong to whichever
+     *       tenant is flooding, every one of them is refused by the admission
+     *       check, and the small tenant's rows at the end of the queue are never
+     *       even looked at — the exact starvation v0.3 sets out to remove.</li>
+     * </ul>
+     *
+     * <p>The blocked lists are the relay's last known view and may be stale by
+     * one refresh interval; that is fine, because the caller re-checks every
+     * selected row against {@code AdmissionControl} before publishing it.
      */
     @Select("""
+            <script>
             SELECT * FROM outbox
              WHERE status = 'NEW'
+            <if test="blockedTenants != null and !blockedTenants.isEmpty()">
+               AND tenant_id NOT IN
+               <foreach collection="blockedTenants" item="tenantId" open="(" separator="," close=")">#{tenantId}</foreach>
+            </if>
+            <if test="blockedEndpoints != null and !blockedEndpoints.isEmpty()">
+               AND endpoint_id NOT IN
+               <foreach collection="blockedEndpoints" item="endpointId" open="(" separator="," close=")">#{endpointId}</foreach>
+            </if>
              ORDER BY id
              LIMIT #{limit}
              FOR UPDATE SKIP LOCKED
+            </script>
             """)
-    List<OutboxMessage> lockBatch(@Param("limit") int limit);
+    List<OutboxMessage> lockSchedulableBatch(@Param("limit") int limit,
+                                             @Param("blockedTenants") List<Long> blockedTenants,
+                                             @Param("blockedEndpoints") List<Long> blockedEndpoints);
 
     @Update("<script>"
             + "UPDATE outbox SET status = 'PUBLISHING', publishing_since = NOW(3),"
@@ -104,6 +137,28 @@ public interface OutboxMapper {
      */
     @Select("SELECT COUNT(*) FROM outbox WHERE status IN ('NEW', 'PUBLISHING')")
     long countUnpublished();
+
+    /**
+     * One tenant's share of the un-published backlog.
+     *
+     * <p>This is the number load shedding has to look at, not the event count: a
+     * tenant whose 10 000 events are already delivered has no backlog at all, while
+     * a tenant with 100 undeliverable events has a real one.
+     */
+    @Select("""
+            SELECT COUNT(*) FROM outbox
+             WHERE tenant_id = #{tenantId} AND status IN ('NEW', 'PUBLISHING')
+            """)
+    long countUnpublishedByTenant(@Param("tenantId") long tenantId);
+
+    /** Every tenant's un-published backlog in one round trip, for the shedding gate. */
+    @Select("""
+            SELECT tenant_id AS id, COUNT(*) AS in_flight
+              FROM outbox
+             WHERE status IN ('NEW', 'PUBLISHING')
+             GROUP BY tenant_id
+            """)
+    List<dev.hookflow.domain.fairness.InFlight> countUnpublishedByTenants();
 
     /**
      * Prunes rows that have been published longer than the retention window.

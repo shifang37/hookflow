@@ -19,6 +19,7 @@ public record Endpoint(
         short secretKeyVersion,
         String subscribedTypes,
         int maxAttempts,
+        int maxConcurrency,
         String status,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
@@ -26,6 +27,11 @@ public record Endpoint(
     public static final String ACTIVE = "ACTIVE";
     public static final String PAUSED = "PAUSED";
     public static final String WILDCARD = "*";
+
+    /** {@code 0} means "no endpoint-level cap; the tenant budget is the only fence". */
+    public boolean hasConcurrencyCap() {
+        return maxConcurrency > 0;
+    }
 
     public boolean isActive() {
         return ACTIVE.equals(status);

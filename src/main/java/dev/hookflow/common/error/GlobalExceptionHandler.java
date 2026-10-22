@@ -25,8 +25,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApiException(ApiException e, HttpServletRequest request) {
         ErrorCode code = e.errorCode();
-        return ResponseEntity.status(code.status())
-                .body(ApiError.of(code, e.getMessage(), requestId(request)));
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(code.status());
+        if (e.retryAfterSeconds() != null) {
+            // A shed request must tell the caller *when* to come back; without this
+            // header every client retries immediately and turns shedding into a
+            // self-inflicted retry storm.
+            builder.header("Retry-After", Integer.toString(e.retryAfterSeconds()));
+        }
+        return builder.body(ApiError.of(code, e.getMessage(), requestId(request)));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

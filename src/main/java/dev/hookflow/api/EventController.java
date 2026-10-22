@@ -35,15 +35,18 @@ public class EventController {
     private final EventIngestService ingestService;
     private final TenantService tenantService;
     private final TenantRateLimiter rateLimiter;
+    private final dev.hookflow.backpressure.BacklogGate backlogGate;
     private final ObjectMapper objectMapper;
 
     public EventController(EventIngestService ingestService,
                            TenantService tenantService,
                            TenantRateLimiter rateLimiter,
+                           dev.hookflow.backpressure.BacklogGate backlogGate,
                            ObjectMapper objectMapper) {
         this.ingestService = ingestService;
         this.tenantService = tenantService;
         this.rateLimiter = rateLimiter;
+        this.backlogGate = backlogGate;
         this.objectMapper = objectMapper;
     }
 
@@ -59,7 +62,12 @@ public class EventController {
 
         long tenantId = ApiKeyPrincipal.Context.requireTenantId();
         Tenant tenant = tenantService.requireActive(tenantId);
+        // Order matters: the rate limiter is a Redis counter (cheap, per-second
+        // quota), the backlog gate is a cached MySQL count (capacity). Rejecting on
+        // quota first keeps the capacity check off the hot path of a tenant that is
+        // already being rate limited.
         rateLimiter.acquire(tenantId, tenant.rateLimit());
+        backlogGate.check(tenantId);
 
         String eventType = request.eventType();
         if (eventType == null || !EVENT_TYPE.matcher(eventType).matches()) {

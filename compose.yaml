@@ -63,6 +63,33 @@ services:
       timeout: 10s
       retries: 20
 
+  # Trace collector (v0.3). Optional, its own profile:
+  #   docker compose --profile tracing up -d
+  #   .\mvnw.cmd spring-boot:run -Dspring-boot.run.arguments="--management.otlp.tracing.export.enabled=true"
+  #
+  # A separate profile on purpose: `docker compose up -d` must keep working on a
+  # machine that cannot pull this image, and OTLP export is opt-in in the app
+  # (management.otlp.tracing.export.enabled=false by default), so nothing else
+  # depends on the collector being reachable.
+  #
+  # Known environment problem (this machine, 2026-10-22): every jaegertracing tag
+  # fails to pull with
+  #   failed commit on ref "...": failed size validation: 2840 != 27969
+  # That is the Docker daemon rejecting a layer, not a bad tag - two different tags
+  # failed identically. The trace-continuity claim therefore rests on TracingIT
+  # (assertions on the wire), not on a screenshot of the Jaeger UI. See
+  # docs/operations.md section 9.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: hookflow-jaeger
+    profiles: ["tracing"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+
   app:
     build:
       context: .
@@ -75,6 +102,9 @@ services:
       REDIS_HOST: redis
       HOOKFLOW_MASTER_KEY: ${HOOKFLOW_MASTER_KEY:-hookflow-dev-master-key-change-in-production-32}
       HOOKFLOW_BOOTSTRAP_TOKEN: ${HOOKFLOW_BOOTSTRAP_TOKEN:-hookflow-dev-bootstrap-token}
+      # Containerised demo exports traces; a host-run demo keeps them off.
+      OTLP_EXPORT: ${OTLP_EXPORT:-true}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://jaeger:4318/v1/traces}
       TZ: UTC
     ports:
       - "8080:8080"

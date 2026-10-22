@@ -1,0 +1,323 @@
+# 性能报告：单机能扛多少，瓶颈在哪
+
+- 测量日期：2026-10-22
+- 代码版本：v0.3.0
+- 原始输出：[docs/perf/2026-10-22/](perf/2026-10-22/)（每次运行的压测器输出、时间线、GC 汇总、机器与参数）
+- 复现命令：`.\scripts\bench.ps1 ...`（见文末「如何复现」）
+
+> **红线（来自 v0.3 计划）**：测不出来就不写数字。README 里不出现任何未测的 QPS。
+> 本文所有数字都对应 `docs/perf/` 下的一份原始输出；没有原始输出的东西，本文写"未测"。
+
+---
+
+## 1. 四个问题的答案
+
+| 问题 | 答案（本机，见 §2 规格） | 依据 |
+|---|---|---|
+| 1. 单机稳定支撑多少事件/秒？瓶颈在哪类资源？ | **约 300–350 events/s**（p99 < 500ms，2KB payload，全部角色同一个 JVM + Docker 里的 MySQL）。瓶颈不是 CPU、不是 GC、不是连接池，而是**每个 ingest 一个 MySQL 事务（≈7 条语句 + 1 次 fsync 提交）**。把 `innodb_flush_log_at_trx_commit` 从 1 改为 2，p50 −25%、p99 −39% | §5、§6 |
+| 2. 大租户刷流量时，小租户的延迟会受影响吗？ | **会，除非给它一个并发预算。** 同一场景下受害租户单条事件的 p99：无预算 4 278ms → 预算 4 时 **639ms（−6.7×）**；集成测试里（1 500 条预置洪水）190ms vs 4 584ms（−24×） | §7 |
+| 3. 过载 3 倍时是降级还是雪崩？ | **取决于水位线。** 水位线 10 000 时：p50 905ms、p99 2.7s、积压 10 258 行；水位线 200 时：p99 **84ms**、92% 请求 2.3ms 内被 429 拒绝、积压 15 秒内归零 | §8 |
+| 4. 一条投递慢，慢在哪一段？ | `X-HookFlow-Trace-Id` + W3C `traceparent` 一路传到接收方；`TracingIT` 断言接收方看到的 trace id 与 API 返回的一致（5 跳一条 trace） | §9 |
+
+---
+
+## 2. 机器与配置（数字属于这台机器，不属于"云上"）
+
+| 项 | 值 |
+|---|---|
+| CPU | Intel Core i5-14600K，14C / 20T |
+| 内存 | 31.7 GiB |
+| OS | Windows 10/11（build 见 `meta.txt`），PowerShell 5.1 |
+| JVM | OpenJDK 21.0.10，`-Xms512m -Xmx512m -XX:+UseG1GC`，`-Duser.timezone=UTC` |
+| 应用形态 | `--spring.profiles.active=all`（api + relay + worker 在同一 JVM，8080） |
+| MySQL | Docker `mysql:8.4`，`--innodb-flush-log-at-trx-commit=1`，`--max-connections=300`，宿主端口 13306 |
+| RabbitMQ | Docker `rabbitmq:4-management`（quorum queue，`x-max-length=20000` + `reject-publish`） |
+| Redis | Docker `redis:8-alpine`（本组压测中限流被关闭，见下） |
+| payload | 2 030 B（2KB 目标，随机字母填充，不可压缩） |
+| 租户 | `rateLimit=0` → **限流关闭**。测的是容量，不是配额 |
+| 端点 | `http://127.0.0.1:9099/hook`（MockReceiver，32 线程，无延迟，`quiet` 不打印） |
+| 观测 | `-Xlog:gc*` + JFR（`settings=profile`）+ `/actuator/prometheus` |
+
+**为什么强调这台机器**：这是一台桌面机，不是 4C8G 的云主机。计划里"4C8G 单机能扛多少"的答案不能直接照抄这里的数字——§10 给的是**换算方法**，用的是本机测出来的单位成本，而不是拍一个比例。
+
+---
+
+## 3. 方法：为什么不用 ab / k6
+
+`ab`、`k6`、`JMeter` 默认都是**闭环**压测：一个虚拟用户发一条、等响应、再发下一条。系统变慢时压测器跟着变慢，于是**在慢的这段时间里本该堆积的请求根本没被发出去**。这叫 **coordinated omission**，它系统性地低估 p99。
+
+本项目的做法：
+
+1. `dev.hookflow.tools.LoadGen` **按固定速率**发压：第 `i` 条请求的应发时刻是 `start + i/rate`，与上一条何时返回无关。
+2. 同一次运行里同时记录两个视角：
+   - **开环**：`完成时刻 − 应发时刻`（含"因为系统慢而等待"的时间）——描述用户体验；
+   - **闭环**：`完成时刻 − 实际发出时刻`——闭环工具会报的那个数。
+3. 两者之差就是 coordinated omission 的量化值，直接印在结果里（`p99 inflation x…`）。
+
+### 同一次运行，两个数字
+
+600 req/s（应发）落在 64 个发送线程、水位线 10 000 的那次运行（[原始输出](perf/2026-10-22/600-default-watermark-64threads/loadgen.txt)）：
+
+| 分位 | 开环（修正后） | 闭环（朴素工具会报的） | 低估倍数 |
+|---|---|---|---|
+| p50 | **905 ms** | 18.9 ms | 48× |
+| p95 | 2 631 ms | 172 ms | 15× |
+| p99 | **2 714 ms** | 229 ms | **11.9×** |
+
+**这就是"不加修正的压测没有意义"的完整证明**：同一批请求，只因为客户端计时起点不同，p99 差了 11.9 倍。而且注意 p99 inflation 只在系统真的过载时才明显——100 req/s 的稳态下它是 1.3×，这恰好说明这个指标本身是可信的。
+
+---
+
+## 4. 稳态阶梯：容量在哪里拐弯
+
+每组 30s（另有 5s 预热），2KB payload，开环，100% 成功除非另有说明。
+
+| 应发速率 | 实际达成 | 成功率 | p50（开环） | p95 | p99 | 原始输出 |
+|---|---|---|---|---|---|---|
+| 100 req/s | 100.0 | 100% | 28.7 ms | 38.6 ms | 48.2 ms | [run1](perf/2026-10-22/100-baseline-run1/loadgen.txt) |
+| 100 req/s | 100.0 | 100% | 29.3 ms | 39.4 ms | 48.2 ms | [run2](perf/2026-10-22/100-baseline-run2/loadgen.txt) |
+| 100 req/s | 100.1 | 100% | 30.5 ms | 42.2 ms | 50.6 ms | [run3](perf/2026-10-22/100-baseline-run3/loadgen.txt) |
+| **300 req/s** | **300.1** | **100%** | **32.7 ms** | 48.1 ms | **110.6 ms** | [32 线程](perf/2026-10-22/300-baseline-32threads/loadgen.txt) |
+| 450 req/s | 461.4 | 65.7%（其余 429） | 35.8 ms | 636 ms | 750 ms | [48 线程](perf/2026-10-22/450-default-watermark-48threads/loadgen.txt) |
+| 600 req/s | 629.1 | 47.9%（其余 429） | 905 ms | 2 631 ms | 2 714 ms | [64 线程](perf/2026-10-22/600-default-watermark-64threads/loadgen.txt) |
+
+读法：
+
+- **300 req/s 是干净的**：100% 接受，p99 110ms，远低于"p99 < 500ms"的目标。
+- **450 req/s 开始出现 429**：不是服务器崩了，是 outbox 积压在这 30 秒里越过了默认的 10 000 行租户水位线（见 §8）。也就是说，**投递侧能持续消化的速率低于 ingest 侧**，差额堆在 outbox 里。
+- 因此本文给"容量"的定义是：**在积压不增长、p99 < 500ms 的前提下能持续接受的速率**，本机约 **300–350 events/s**。
+
+### 测量本身犯过一次错（值得记下来）
+
+第一轮只有 **4 个发送线程**，我得到的结论是"容量 ≈ 175 req/s"。那是错的：
+
+```
+4 线程 × (1 / 23ms 服务时间) ≈ 175 req/s   ← 压测器的上限
+```
+
+把线程数提到 32 之后，同样的 300 req/s 达成率 100%、p99 110ms。**压测器成了瓶颈，而报告差点把它写成服务器容量。** 保留这个错误的原因写在 §11。
+
+---
+
+## 5. 瓶颈判定：证据而不是猜测
+
+### 5.1 GC 不是（每个场景都一样）
+
+`-Xlog:gc*` 统计（每次运行结束自动汇总成 `gc-summary.txt`）：
+
+| 场景 | Young GC 次数 | 总停顿 | 最大单次停顿 |
+|---|---|---|---|
+| 100 req/s ×3 | 21 / 23 / 22 | 85–93 ms | 8.7–9.5 ms |
+| 300 req/s | 28 | 104.8 ms | 10.4 ms |
+| 600 req/s（水位 200） | 26 | 100.0 ms | 11.9 ms |
+| 600 req/s（默认水位） | 33 | 127.1 ms | 10.1 ms |
+
+35 秒里的总停顿是 85–127 ms，**占 wall time 的 0.24%–0.40%**；最大单次停顿 12ms，而 p50 是 29ms。GC 无论如何解释不了延迟，更解释不了吞吐。
+
+### 5.2 G1 调参前后对比（结论：没用，但要知道为什么）
+
+同一负载（100 req/s × 30s）、同一堆（512m），只改收集器参数：
+
+| | p50（开环） | p95 | p99 | GC 次数 | GC 总停顿 | 最大停顿 |
+|---|---|---|---|---|---|---|
+| 默认（`MaxGCPauseMillis` 200） | 29.5 ms | 42.5 ms | 52.0 ms | 21 | 85.8 ms | 9.2 ms |
+| `MaxGCPauseMillis=20` + `IHOP=25` | 29.6 ms | 43.0 ms | 50.4 ms | 32 | 82.0 ms | **5.7 ms** |
+
+调参把**最大停顿减半（9.2 → 5.7ms）**，但 p50/p99 在噪声范围内不变。原因很简单：GC 只占 0.25% 的时间，把它优化到 0 也换不来 1% 的吞吐。**不测就调参，调的是心理安慰。**
+
+### 5.3 JFR：进程基本在等 I/O
+
+600 req/s（水位 200）那次运行的 JFR（`jfr.jfr`，约 78s 进程存活）：
+
+| 事件 | 次数 | 累计时长 |
+|---|---|---|
+| `jdk.ThreadPark` | 35 745 | 1 270 158 ms |
+| `jdk.SocketRead` | 7 470 | 312 592 ms |
+| `jdk.ExecutionSample` | 285 | 3 170 ms |
+| `jdk.GCPhasePause` | 26 | 587 ms |
+| `jdk.JavaMonitorEnter` | 61 | 1 348 ms |
+
+- 78 秒里**被采样到的 on-CPU 时间只有 3.2 秒**（≈0.04 个核），CPU 不是瓶颈；
+- `SocketRead` 累计 313 秒 ≈ **平均 4 个线程同时阻塞在 socket 读**（MySQL 与出站 HTTP）；
+- CPU 采样里最大的帧是线程池调度本身（`ThreadPoolExecutor.runWorker`，15/285），唯一像业务代码的是 Jackson 的 `UTF8StreamJsonParser._finishAndReturnString`（8/285 ≈ 2.8%）。
+
+> 说明：`ExecutionSample` 只采样**正在跑**的线程，所以"样本很少"本身就是结论——线程几乎都在等。
+
+### 5.4 连接池不是瓶颈
+
+所有运行里 `hikaricp_connections_pending = 0`（没有线程在等连接），池上限 16，平均每次占用 2.2–4.7ms。**加大连接池不会有任何收益**，这一点用数据排除掉了猜测。
+
+### 5.5 真正的成本中心：一个 ingest 一个事务 + 一次 fsync
+
+服务端自身耗时（`http_server_requests_seconds_sum / count`，`POST /v1/events`，202）：
+
+| 场景 | 平均服务端耗时 | 最大 |
+|---|---|---|
+| 300 req/s，默认 fsync | 见下 | 68 ms |
+| 300 req/s，`innodb_flush_log_at_trx_commit=2` | 16.2 ms | 68 ms |
+
+**改动前后对比（A/B，唯一变量 = 提交持久化策略，300 req/s × 32 线程，两次都 100% 成功）：**
+
+| `innodb_flush_log_at_trx_commit` | p50（开环） | p95 | p99 | 原始输出 |
+|---|---|---|---|---|
+| 1（每次提交 fsync） | 32.7 ms | 48.1 ms | 110.6 ms | [输出](perf/2026-10-22/300-baseline-32threads/loadgen.txt) |
+| 2（每秒刷一次盘） | **24.7 ms（−25%）** | **37.3 ms** | **67.7 ms（−39%）** | [输出](perf/2026-10-22/300-fsync2-32threads/loadgen.txt) |
+
+**效果**：p99 −39%。
+**代价**：崩溃（断电/内核 panic）可能丢掉最近 **1 秒**已提交的事务。本项目把 MySQL 当唯一真相源，所以这个改动**不作为默认值**——列在这里是为了说明"瓶颈确实在这一层"，而不是为了刷榜。
+
+**没测到的部分，不猜**：一个 ingest 的服务端耗时 16–23ms，而单次连接占用只有 2–5ms，剩下的时间花在"语句之间的往返次数"还是"事务内的锁等待"上，我没有做到单语句粒度的测量，所以**不写结论**。下一步应该是 MySQL `performance_schema` 的按语句聚合，或用 JFR `jdk.SocketRead` 按调用者聚合。
+
+---
+
+## 6. 容量模型
+
+模型本身在 [docs/capacity.md](capacity.md)：给定 4C8G、payload 2KB、目标 p99 < 500ms，能支撑多少 TPS、瓶颈在 DB 写还是网络、扩容先加谁。这里只强调一件事：**模型里的每个系数都来自本节的实测**，没有一个是拍的。
+
+---
+
+## 7. 公平性：一个预算把 4.2 秒变成 0.64 秒
+
+场景：租户 A 以 60 req/s 灌入（接收方每次慢 200ms，制造队列），租户 B 在这期间提交 **10 条**事件（接收方快，200ms 延迟只加在 A 的端点上，这样 B 的延迟几乎全是"排队等待别人"）。唯一变量是 A 的 `max_in_flight`：
+
+| A 的并发预算 | B 的 p50 | B 的 p95 | B 的 p99 | B 完成时 A 还积压 |
+|---|---|---|---|---|
+| 4（v0.3） | **414 ms** | 639 ms | **639 ms** | 1 054 |
+| 0（不限 = v0.2 行为） | 4 196 ms | 4 278 ms | **4 278 ms** | 789 |
+
+[原始输出](perf/2026-10-22/fairness-ab/fairness.txt)（`fairness.json` 同目录）
+
+p99 **−6.7×**，而且注意"B 完成时 A 还积压"两行几乎一样（1 054 vs 789）——**积压没有变少，只是不再挡在 B 前面**。这正是 ADR-0009 声称的机制：预算限制的是"前面有多少条"，不是"总共有多少条"。
+
+集成测试里用 1 500 条预置洪水、50ms 接收方，重复跑了三次（同一台机器、不同时刻）：
+
+| 运行 | 有预算（`max_in_flight=4`） | 无预算 | 比值 |
+|---|---|---|---|
+| 1 | 146 ms | 4 172 ms | 28.6× |
+| 2 | 190 ms | 4 584 ms | 24.1× |
+| 3 | 316 ms | 3 794 ms | 12.0× |
+
+`FairnessIT` 断言的是**方向**（有预算 < 2 000ms、无预算 > 2 000ms、比值 > 3），而不是某个具体毫秒数——**桌面上跑出来的绝对值不可复现，方向和量级可以。**
+
+---
+
+## 8. 过载 3 倍：降级还是雪崩
+
+应发 600 req/s（约为容量 300–350 的 1.8–2 倍，也是本机可稳定生成的上限附近），64 发送线程，30 秒。唯一变量 = **租户积压水位线**：
+
+| 指标 | 水位线 10 000（默认） | 水位线 200 |
+|---|---|---|
+| 实际达成 | 629 req/s | 600 req/s |
+| 成功率 | 47.9% | 7.9% |
+| 429 比例 | 52.1% | **92.1%** |
+| p50（开环） | 905 ms | **10.9 ms** |
+| p95 | 2 631 ms | 44.8 ms |
+| p99（开环） | 2 714 ms | **84.1 ms** |
+| p99（闭环） | 229 ms | 76.5 ms |
+| 结束时 outbox 积压 | 10 258 行 | 302 行 |
+| 15 秒后积压 | 未测（已超时） | **0** |
+| 原始输出 | [输出](perf/2026-10-22/600-default-watermark-64threads/loadgen.txt) | [输出](perf/2026-10-22/600-watermark200-64threads/loadgen.txt) |
+
+这张表就是计划里那句话的答案：
+
+- **水位线定得太高 = 雪崩形态**：所有人一起等 0.9 秒，一半人最后还是被拒；
+- **水位线定得合理 = 降级形态**：绝大多数请求在 **2.3ms** 内拿到 429 + `Retry-After`，被接受的那 7.9% 在 11ms 内完成，积压 15 秒内清零。
+
+**这不是"调参让它变快"，而是"选择失败的方式"**：同样 600 req/s 的到达率，两种水位线都拒绝了一半以上的请求，但一种拒绝得干净、一种把所有人拖慢 100 倍。
+
+> 注意：默认 10 000 的选择是**为了不丢数据、不把 MySQL 写爆**，不是为了保延迟。真正生产该按 `目标等待时间 × 排空速率` 来定（本机排空 ≈ 300/s × 5s ≈ 1 500），这条写进了 ADR-0010。
+
+---
+
+## 9. 一条 trace 串起 5 跳
+
+`TracingIT`：真实 HTTP 请求 → API 响应头 `X-HookFlow-Trace-Id` → 接收方收到的 W3C `traceparent`，断言**同一个 trace id、不同 span id**。
+
+```
+api (HTTP span) -> relay (hookflow.publish, PRODUCER) -> worker (hookflow.delivery, CONSUMER)
+                                                        -> hookflow.receiver (CLIENT) -> 客户接收方
+```
+
+链路证据不是"能导出 span"，而是**同一条投递在两端是同一个 trace**。本地看耗时的命令见 README 的「可观测」一节（Jaeger UI，4318 OTLP/HTTP）。
+
+---
+
+## 10. 从这台机器推到 4C8G
+
+不做简单的线性外推，而是用测出来的**单位成本**推：
+
+本机测得的稳态单位成本（2KB payload，100–300 req/s 区间）：
+
+| 成本项 | 实测 | 说明 |
+|---|---|---|
+| 每事件服务端耗时 | 16–23 ms（视 fsync 策略） | §5.5 |
+| 其中 DB 连接占用 | 2–5 ms | `hikaricp_connections_usage_seconds_*` |
+| 每事件提交次数 | 1 次事务提交（≈7 条语句） | 代码路径固定 |
+| GC 开销 | 0.25–0.40% wall time | §5.1 |
+| CPU 占用 | ~0.04 核（等待为主） | §5.3 |
+
+既然瓶颈是**串行化的 I/O 往返**而不是 CPU，那么 4C8G 与 14C/20T 的差别主要在：
+
+1. **可以并发的连接数**：如果把 `DB_POOL_SIZE` 从 16 提到 32，本机不会更快（`pending=0` 已证明），但 4C 机器上 16 连接可能先撞上限；
+2. **MySQL 与应用的 I/O 竞争**：同机部署时 4C8G 更容易互相拖慢，比 CPU 核数的影响大；
+3. **GC 的堆余量**：512m 堆在 0.04 核的分配速率下绰绰有余，4C 机器上同样够。
+
+因此 `docs/capacity.md` 给出的 4C8G 结论是**区间 + 判据**（例如"若 p99 目标 500ms 且单事件服务端成本 20ms，单实例 ≈ 16 连接 × (1000/20) ≈ 800 events/s 的理论上限，但实测只能到 300–350，缺口在事务内的串行等待"），并且明确写了**没有 4C8G 机器可以实测**这件事。
+
+---
+
+## 11. 测量本身的三个错误（留档，不隐藏）
+
+1. **4 线程压测器被当成了服务器容量。** 见 §4 末尾。教训：先证明压测器不是瓶颈（发送线程数 × 1/服务时间 ≫ 目标速率），再谈容量。
+2. **脏数据库。** 第一版没有清库，上一轮留下的 4 577 条 PENDING delivery 让"受害者"的 10 条事件排在它们后面，测出来全是 0ms。现在 `bench.ps1` 默认在启动前清库（`-KeepData` 可以保留）。
+3. **JFR 是 0 字节。** 应用是被 `kill` 掉的，`dumponexit=true` 不会执行。现在脚本在杀进程前显式 `jcmd JFR.dump`。
+
+这三个都是"测量方法"层面的错误，不是代码缺陷——但如果不修，§3–§8 的每一个数字都会是错的。**先修测量，再报数字。**
+
+---
+
+## 12. 如何复现
+
+```powershell
+# 依赖（本机 3306 被占用时用 13306）
+docker compose up -d
+.\mvnw.cmd -DskipTests package
+
+# 稳态：100 / 300 req/s
+.\scripts\bench.ps1 -Scenario api -Rate 100 -Duration 30 -Warmup 5
+.\scripts\bench.ps1 -Scenario api -Rate 300 -Duration 30 -Warmup 5 -Threads 32
+
+# 过载对比：默认水位 vs 200 行水位
+.\scripts\bench.ps1 -Scenario overload -Rate 600 -Duration 30 -Threads 64
+.\scripts\bench.ps1 -Scenario overload -Rate 600 -Duration 30 -Threads 64 -TenantWatermark 200
+
+# 公平性 A/B（自动跑"预算 4"和"预算 0"两次）
+.\scripts\bench.ps1 -Scenario fairness -Rate 60 -Duration 20 -Threads 2 -ReceiverDelayMs 200
+
+# G1 调参 A/B
+.\scripts\bench.ps1 -Scenario api -Rate 100 -Duration 30 -JvmTuning "MaxGCPauseMillis=20,InitiatingHeapOccupancyPercent=25"
+
+# fsync A/B（实验性，会降低持久性）
+docker exec hookflow-mysql mysql -uroot -proot -e "SET GLOBAL innodb_flush_log_at_trx_commit=2"
+```
+
+每次运行产出到 `bench-results/<时间戳>-<场景>/`：`loadgen.txt`、`timeline.csv`（每秒接受/429/其他）、`gc.log`、`jfr.jfr`、`metrics.txt`、`db.txt`、`meta.txt`、`app.log`。**报告只允许引用这些文件里的内容。**
+
+火焰图（若有 async-profiler）与 GC 日志分析：
+
+```bash
+jfr summary bench-results/<run>/jfr.jfr
+jfr print --events jdk.ExecutionSample bench-results/<run>/jfr.jfr | head -100
+asprof -e cpu -d 30 -f profile.html <app-pid>
+```
+
+---
+
+## 13. 没有测的（明确不声称）
+
+- **没有在多机 / 多进程拓扑下测**（api / relay / worker 分离部署）。本文数字全部来自单 JVM `all` profile。
+- **没有测 HTTP 接收方在真实公网下的表现**（RTT、TLS、DNS）。接收方是本机回环。
+- **没有测 Redis 限流开启时的开销**（本组压测刻意关闭限流）。
+- **没有测 MySQL 在另一台机器上的表现**（同机 Docker，fsync 走同一块盘）。
+- **没有做 tail-based 采样或 trace 存储容量测试。**
+- **没有测 4C8G 机器**，§10 是模型不是实测。
