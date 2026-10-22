@@ -1,6 +1,7 @@
 package dev.hookflow.persistence;
 
 import dev.hookflow.domain.outbox.OutboxMessage;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -92,4 +93,30 @@ public interface OutboxMapper {
 
     @Select("SELECT COUNT(*) FROM outbox WHERE status = 'NEW'")
     long countPending();
+
+    /**
+     * Work that the broker has not accepted yet.
+     *
+     * <p>Distinct from {@link #countPending()} on purpose: a row cycles between NEW
+     * and PUBLISHING every relay tick while the broker is down, so NEW alone reads as
+     * zero exactly when the backlog is worst. This is the number an operator should
+     * alert on.
+     */
+    @Select("SELECT COUNT(*) FROM outbox WHERE status IN ('NEW', 'PUBLISHING')")
+    long countUnpublished();
+
+    /**
+     * Prunes rows that have been published longer than the retention window.
+     *
+     * <p>Without this the table grows without bound: one row per delivery attempt,
+     * forever. Kept as a bounded batch so a large backlog cannot turn into one
+     * multi-minute DELETE that blocks the relay.
+     */
+    @Delete("""
+            DELETE FROM outbox
+             WHERE status = 'PUBLISHED'
+               AND published_at < DATE_SUB(NOW(3), INTERVAL #{retentionDays} DAY)
+             LIMIT #{batchSize}
+            """)
+    int deletePublishedBefore(@Param("retentionDays") int retentionDays, @Param("batchSize") int batchSize);
 }

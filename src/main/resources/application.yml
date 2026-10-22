@@ -73,6 +73,9 @@ hookflow:
     # How long a PUBLISHING row may stay ambiguous before it is re-published.
     stale-publishing-seconds: 60
     sweep-interval-ms: 30000
+    # Prune PUBLISHED rows after this many days; 0 disables pruning.
+    retention-days: 7
+    retention-interval-ms: 3600000
   retry:
     base-delay-ms: 5000
     max-delay-ms: 3600000
@@ -86,6 +89,11 @@ hookflow:
     master-key: ${HOOKFLOW_MASTER_KEY:hookflow-dev-master-key-change-in-production-32}
     key-version: 1
     signature-header: X-HookFlow-Signature
+    # SSRF defence. Production roles (api/relay/worker) keep these strict; the
+    # local demo profile `all` relaxes the range check — see application-all.yml.
+    egress:
+      allow-private-targets: false
+      allowed-hosts: []
   rate-limit:
     enabled: true
     # true  -> Redis outage lets events through (availability over protection)

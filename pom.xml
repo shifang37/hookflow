@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -13,7 +13,7 @@
 
   <groupId>dev.hookflow</groupId>
   <artifactId>hookflow</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.2.0-SNAPSHOT</version>
   <name>hookflow</name>
   <description>Reliable multi-tenant webhook delivery platform</description>
 
@@ -28,6 +28,7 @@
     <argLine>-Duser.timezone=UTC</argLine>
     <mybatis-spring-boot.version>4.1.0</mybatis-spring-boot.version>
     <springdoc.version>3.1.1</springdoc.version>
+    <jqwik.version>1.10.2</jqwik.version>
   </properties>
 
   <dependencies>
@@ -58,7 +59,7 @@
     </dependency>
     <!--
       Boot 4 moved Flyway auto-configuration into its own starter. Adding only
-      flyway-core leaves migrations silently unrun — tables never get created and
+      flyway-core leaves migrations silently unrun 鈥?tables never get created and
       every query fails with "table doesn't exist". flyway-mysql supplies the
       MySQL-specific dialect on top of it.
     -->
@@ -127,6 +128,13 @@
       <artifactId>testcontainers-rabbitmq</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- Property-based / model-based testing: invariants over generated inputs. -->
+    <dependency>
+      <groupId>net.jqwik</groupId>
+      <artifactId>jqwik</artifactId>
+      <version>${jqwik.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -156,3 +164,4 @@
     </plugins>
   </build>
 </project>
+

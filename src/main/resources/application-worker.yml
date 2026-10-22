@@ -1,6 +1,8 @@
 # Role: worker
 # Consumes delivery work and calls customer endpoints. Scale out freely: the
 # attempt-count fence makes duplicate messages harmless.
+server:
+  port: ${WORKER_PORT:8082}
 spring:
   rabbitmq:
     listener:

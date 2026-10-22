@@ -1,0 +1,13 @@
+# Role: all — the local demo profile.
+#
+# This is the profile a reviewer gets from `./mvnw spring-boot:run`, and it runs
+# api + relay + worker in one process. Because the demo receiver listens on
+# 127.0.0.1, the outbound target policy is relaxed here.
+#
+# This is NOT a production profile. Deployments use api / relay / worker, where
+# egress stays strict (loopback, private, link-local and cloud metadata addresses
+# are all refused).
+hookflow:
+  security:
+    egress:
+      allow-private-targets: true

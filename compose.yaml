@@ -22,7 +22,9 @@ services:
       MYSQL_PASSWORD: hookflow
       TZ: UTC
     ports:
-      - "3306:3306"
+      # Host port is configurable so the demo does not fight a MySQL that is
+      # already listening on 3306. Set DB_PUBLISH_PORT=13306 and DB_PORT=13306.
+      - "${DB_PUBLISH_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:

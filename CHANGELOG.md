@@ -3,15 +3,55 @@
 本项目的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased] — v0.2 计划
+## [Unreleased] — v0.3 计划
 
 ### 计划新增
-- 故障注入自动化（Toxiproxy）：把手工 `kill -9` 演练变成 CI 可重放的测试
-- 属性测试 / 模型测试（jqwik）验证状态机不变式
+- 多租户公平调度：按 `tenant_id` 分片队列 + 加权轮询，防止大租户饿死小租户
+- 背压与降载：有界队列、拒绝策略、积压时的降级
+- wrk2 无 coordinated-omission 的延迟测量 + JFR/火焰图/GC 调优前后对比
 - OpenTelemetry trace 贯通 `api → outbox → relay → MQ → worker → receiver`
-- `docs/failures/` 补三份真实演练记录（D1 relay 崩溃 / D2 worker 崩溃 / D3 依赖宕机）
-- outbox / delivery_attempt 保留策略
-- SSRF 防护：拒绝内网地址与出网 IP 白名单
+- 容量模型文档（多少 worker 支撑多少 TPS，瓶颈在哪一类资源）
+
+## [0.2.0] — 2026-10-22
+
+主题：**把"能跑"变成"有测试保障"**。v0.1 的每条可靠性主张，现在都能指向一个可重放的测试或一次真实演练。
+
+### 新增 — 安全
+
+- **SSRF 出网防护**（`EgressGuard`）：创建 endpoint 时拒绝回环、私有、链路本地（含 `169.254.169.254` 云元数据）、CGNAT、IPv6 ULA、保留段与组播；支持显式 host 白名单；仅本地演示 profile 放开
+  - 对 IPv4 全地址空间做属性测试，穷举校验范围分类
+- 生产 profile（api/relay/worker）默认严格，`all`（本地演示）profile 显式放开
+
+### 新增 — 运维
+
+- **outbox 保留策略**：`hookflow.relay.retention-days`（默认 7），批量清理 PUBLISHED 行，避免表无限增长
+- `OutboxMapper.countUnpublished()`：统计 `NEW + PUBLISHING`。单看 `NEW` 会在积压最严重时读到 0（行在两个状态间振荡），是一个会谎报健康的指标
+- 三个角色分配默认端口（8080/8081/8082），使同机多角色运行成为可能
+
+### 新增 — 测试
+
+- **jqwik 属性测试**（16 个属性，共 26 个测试方法）：退避抖动区间、签名完整性与防篡改、订阅匹配语义、IPv4 范围分类
+- **`ReceiverFaultIT`**：慢接收方 → `TIMEOUT`、连接被拒 → `CONNECT_ERROR`、故障消失后同一个 delivery 自动成功
+- **`BrokerOutageIT`**：冻结 RabbitMQ 后事件仍被接受、`attempt` 数为零、工作停在 outbox；恢复后自动追平且只尝试一次
+- **`OutboxCrashWindowIT`**：确定性重建「确认后崩溃」窗口——sweeper 重新武装 + 消息重复 + attempt 护栏吸收
+- 测试总数 34 → **67**（47 单元 + 20 集成）
+
+### 新增 — 演练
+
+- `scripts/drill.ps1`：把 api/relay/worker 作为独立 JVM 启动，真杀进程、真停容器
+- D1 relay `kill -9`：5 个事件停在 outbox，重启后 4 秒追平，全部 `attemptCount=1`
+- D2 worker 请求中途 `kill -9`：attempt 1 `ABANDONED/LEASE_EXPIRED`，attempt 2 成功，11 秒收敛
+- D3 停 Redis / 暂停 RabbitMQ：事件均被接受，工作停在 outbox，恢复后 2 秒追平
+
+### 修复（v0.2 测试与演练发现）
+
+- `docs/failures/0003`：broker 停机时 outbox 行卡在 `PUBLISHING` —— `DeliveryPublisher` 把 `convertAndSend` 放在 try 之外，`AmqpException` 绕过 relay 的 `releaseBack`，快速恢复路径形同死代码
+- 演练发现的部署缺陷：三个角色都默认监听 8080，同机多角色必撞
+
+### 变更
+
+- `docs/adr/0008`：放弃 Toxiproxy，改用容器 pause/unpause + 确定性状态构造（理由与代价已记录）
+- README、运维手册、投递语义文档同步更新
 
 ## [0.1.0] — 2026-10-22
 

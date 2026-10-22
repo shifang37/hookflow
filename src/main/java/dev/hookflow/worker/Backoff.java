@@ -6,9 +6,12 @@ import java.util.SplittableRandom;
  * Exponential backoff with equal jitter.
  *
  * <p>{@code base * 2^(attempt-1)} capped at {@code max}, then jittered into
- * {@code [delay/2, delay)}. The jitter matters more than the exponent: without
- * it, a broker outage makes every waiting delivery retry in the same millisecond
- * and the recovering endpoint is hit by a synchronised wave.
+ * {@code [cap/2, cap)}. The jitter matters more than the exponent: without it, a
+ * broker outage makes every waiting delivery retry in the same millisecond and the
+ * recovering endpoint is hit by a synchronised wave.
+ *
+ * <p>{@link #capForAttempt(int)} exposes the un-jittered bound so the jitter
+ * invariant can be stated as a property instead of a hand-picked example.
  */
 public final class Backoff {
 
@@ -29,8 +32,8 @@ public final class Backoff {
         this.random = random;
     }
 
-    /** Delay before the given attempt number (1-based) is retried. */
-    public long delayForAttempt(int attemptNo) {
+    /** The un-jittered upper bound before the given attempt number (1-based). */
+    public long capForAttempt(int attemptNo) {
         if (attemptNo < 1) {
             throw new IllegalArgumentException("attemptNo must be >= 1");
         }
@@ -38,7 +41,12 @@ public final class Backoff {
         for (int i = 1; i < attemptNo && exponential < maxDelayMs; i++) {
             exponential = Math.min(exponential * 2, maxDelayMs);
         }
-        long capped = Math.min(exponential, maxDelayMs);
+        return Math.min(exponential, maxDelayMs);
+    }
+
+    /** Delay before the given attempt number (1-based) is retried. */
+    public long delayForAttempt(int attemptNo) {
+        long capped = capForAttempt(attemptNo);
         long half = capped / 2;
         if (half <= 0) {
             return capped;

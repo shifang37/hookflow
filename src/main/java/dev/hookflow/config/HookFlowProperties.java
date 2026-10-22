@@ -2,6 +2,8 @@ package dev.hookflow.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.List;
+
 /**
  * All tunables in one place. Every value here has a documented default in
  * {@code application.yml}; nothing is hard-coded inside business logic.
@@ -31,8 +33,17 @@ public record HookFlowProperties(
     public record Lease(int ttlSeconds, int sweepIntervalMs) {
     }
 
-    /** Outbox -> broker publishing. */
-    public record Relay(int batchSize, int maxPublishAttempts, int intervalMs, int stalePublishingSeconds) {
+    /**
+     * Outbox -> broker publishing.
+     *
+     * @param retentionDays how long a PUBLISHED row is kept for debugging before
+     *                      the table is pruned; without this the table grows forever
+     */
+    public record Relay(int batchSize,
+                        int maxPublishAttempts,
+                        int intervalMs,
+                        int stalePublishingSeconds,
+                        int retentionDays) {
     }
 
     /** Exponential backoff with jitter. */
@@ -42,8 +53,22 @@ public record HookFlowProperties(
     /**
      * @param masterKey base64 encoded 32-byte AES key; injected via env var, never committed
      * @param keyVersion recorded next to each ciphertext so keys can be rotated
+     * @param egress     outbound target policy (SSRF defence)
      */
-    public record Security(String masterKey, short keyVersion, String signatureHeader) {
+    public record Security(String masterKey, short keyVersion, String signatureHeader, Egress egress) {
+    }
+
+    /**
+     * Outbound target policy. Defaults are deliberately strict: a webhook platform
+     * that will happily POST to {@code 169.254.169.254} is an SSRF pivot into the
+     * host's cloud metadata service.
+     *
+     * @param allowPrivateTargets allow loopback / private / link-local targets;
+     *                            only for local demos and tests
+     * @param allowedHosts        explicit host allow-list that overrides the range
+     *                            checks (exact match)
+     */
+    public record Egress(boolean allowPrivateTargets, List<String> allowedHosts) {
     }
 
     /**

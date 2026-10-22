@@ -10,7 +10,6 @@ import dev.hookflow.persistence.EndpointMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URI;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
@@ -29,18 +28,21 @@ public class EndpointService {
     private final AuditLogMapper auditLogMapper;
     private final SecretCipher secretCipher;
     private final HookFlowProperties properties;
+    private final EgressGuard egressGuard;
     private final SecureRandom random = new SecureRandom();
 
     public EndpointService(EndpointMapper endpointMapper,
                            DeliveryMapper deliveryMapper,
                            AuditLogMapper auditLogMapper,
                            SecretCipher secretCipher,
-                           HookFlowProperties properties) {
+                           HookFlowProperties properties,
+                           EgressGuard egressGuard) {
         this.endpointMapper = endpointMapper;
         this.deliveryMapper = deliveryMapper;
         this.auditLogMapper = auditLogMapper;
         this.secretCipher = secretCipher;
         this.properties = properties;
+        this.egressGuard = egressGuard;
     }
 
     public record CreatedEndpoint(Endpoint endpoint, String signingSecret) {
@@ -48,7 +50,7 @@ public class EndpointService {
 
     @Transactional
     public CreatedEndpoint create(long tenantId, String url, String subscribedTypes, Integer maxAttempts) {
-        validateUrl(url);
+        egressGuard.validate(url);
         String types = (subscribedTypes == null || subscribedTypes.isBlank()) ? Endpoint.WILDCARD : subscribedTypes;
         int attempts = maxAttempts == null ? properties.retry().defaultMaxAttempts() : maxAttempts;
         if (attempts < 1 || attempts > 50) {
@@ -104,27 +106,5 @@ public class EndpointService {
         endpointMapper.updateStatus(endpointId, tenantId, Endpoint.ACTIVE);
         auditLogMapper.insert(tenantId, "api-key", "endpoint.resume", "endpoint", endpointId, "{}");
         return require(tenantId, endpointId);
-    }
-
-    private void validateUrl(String url) {
-        if (url == null || url.isBlank()) {
-            throw ApiException.invalid("url is required");
-        }
-        if (url.length() > 2048) {
-            throw ApiException.invalid("url is too long");
-        }
-        URI uri;
-        try {
-            uri = URI.create(url);
-        } catch (IllegalArgumentException e) {
-            throw ApiException.invalid("url is not a valid URI");
-        }
-        String scheme = uri.getScheme();
-        if (scheme == null || !(scheme.equals("http") || scheme.equals("https"))) {
-            throw ApiException.invalid("url must use http or https");
-        }
-        if (uri.getHost() == null) {
-            throw ApiException.invalid("url must contain a host");
-        }
     }
 }

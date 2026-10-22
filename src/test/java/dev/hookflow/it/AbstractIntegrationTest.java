@@ -61,5 +61,9 @@ public abstract class AbstractIntegrationTest {
         // The lease sweeper would race tests that manipulate leases by hand; the
         // tests assert the reclaim semantics explicitly instead.
         registry.add("hookflow.lease.sweep-interval-ms", () -> 3_600_000);
+        // Short read timeout so a deliberately slow receiver is classified as
+        // TIMEOUT quickly instead of holding the suite for 10 seconds.
+        registry.add("hookflow.delivery.read-timeout-ms", () -> 1_200);
+        registry.add("hookflow.delivery.connect-timeout-ms", () -> 1_000);
     }
 }

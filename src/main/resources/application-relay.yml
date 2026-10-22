@@ -1,6 +1,12 @@
 # Role: relay
 # Turns outbox rows into broker messages. Holds no consumer, so a relay restart
 # cannot interrupt an in-flight delivery.
+#
+# A distinct port lets all three roles run side by side on one host (the drill
+# script does exactly that). In a cluster each role lives in its own pod and the
+# port only carries actuator traffic.
+server:
+  port: ${RELAY_PORT:8081}
 hookflow:
   relay:
     interval-ms: 200

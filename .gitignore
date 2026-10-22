@@ -26,3 +26,6 @@ build-it.log
 .env
 hookflow-data/
 bench-results/
+
+### jqwik seed database ###
+.jqwik-database

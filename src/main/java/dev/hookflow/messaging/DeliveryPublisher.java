@@ -9,6 +9,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Publishes a delivery work item and blocks until the broker confirms it.
@@ -33,15 +34,23 @@ public class DeliveryPublisher {
     }
 
     /**
-     * @throws PublishFailedException when the broker does not confirm in time
+     * Publishes and waits for the broker to take responsibility.
+     *
+     * <p><b>Everything</b> is inside the try, including {@code convertAndSend}: when
+     * the broker is unreachable the send itself throws {@code AmqpException}, and an
+     * unwrapped exception here would escape the relay's error handling, leaving the
+     * outbox row stuck in PUBLISHING until the 60-second sweeper noticed. Wrapping it
+     * lets the relay put the row straight back to NEW and retry on the next tick.
+     *
+     * @throws PublishFailedException when the message could not be published, for any reason
      */
     public void publish(DeliveryMessage message) {
         String body = objectMapper.writeValueAsString(message);
         CorrelationData correlation = new CorrelationData(UUID.randomUUID().toString());
-        rabbitTemplate.convertAndSend("", RabbitTopology.DELIVERY_QUEUE, body, correlation);
         try {
-            CorrelationData.Confirm confirm = correlation.getFuture().get(CONFIRM_TIMEOUT.toMillis(),
-                    java.util.concurrent.TimeUnit.MILLISECONDS);
+            rabbitTemplate.convertAndSend("", RabbitTopology.DELIVERY_QUEUE, body, correlation);
+            CorrelationData.Confirm confirm = correlation.getFuture()
+                    .get(CONFIRM_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             if (!confirm.isAck()) {
                 throw new PublishFailedException("Broker nacked message " + correlation.getId()
                         + ": " + confirm.getReason());
@@ -49,11 +58,12 @@ public class DeliveryPublisher {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new PublishFailedException("Interrupted while awaiting publisher confirm", e);
+        } catch (PublishFailedException e) {
+            throw e;
         } catch (Exception e) {
-            if (e instanceof PublishFailedException pfe) {
-                throw pfe;
-            }
-            throw new PublishFailedException("Publisher confirm failed for " + correlation.getId(), e);
+            log.debug("publish failed for {}", correlation.getId(), e);
+            throw new PublishFailedException(
+                    "Publish failed for " + correlation.getId() + ": " + e.getMessage(), e);
         }
     }
 

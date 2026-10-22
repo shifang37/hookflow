@@ -32,6 +32,7 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 ```bash
 # 1. 起依赖（MySQL 8.4 + Redis + RabbitMQ）
 docker compose up -d
+#    若本机 3306 已被占用：DB_PUBLISH_PORT=13306 DB_PORT=13306 docker compose up -d
 
 # 2. 起服务
 ./mvnw spring-boot:run
@@ -239,27 +240,50 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 21 个单元测试，秒级，不需要 Docker
-./mvnw verify    # 21 单元 + 13 集成 = 34 个测试，起真实 MySQL 8.4 与 RabbitMQ 4
+./mvnw test      # 47 个单元测试（含 16 个 jqwik 属性测试），秒级，不需要 Docker
+./mvnw verify    # 47 单元 + 20 集成 = 67 个测试，起真实 MySQL 8.4 与 RabbitMQ 4
 ```
 
 | 测试 | 证明的命题 |
 |---|---|
-| `BackoffTest` | 退避确实指数增长、被上限截断、抖动落在 `[cap/2, cap)` 内 |
-| `HmacSignerTest` | 篡改 body / 换 delivery id / 换密钥 / 换时间戳都会验签失败 |
-| `SecretCipherTest` | 每次加密用新 IV；密文被篡改或主密钥错误时解密失败 |
-| `DeliveryStatusTest` | 状态机语义与文档一致；订阅匹配是精确匹配不是前缀匹配 |
-| `EventIngestIT` | 20 个并发同幂等键请求 → 1 个事件；扇出只发给匹配的 endpoint；claim 互斥；lease 回收；outbox 唯一键允许下一轮重试 |
-| `EndToEndDeliveryIT` | 真实链路：event → outbox → relay → RabbitMQ → worker → HTTP；2xx 成功、5xx 重试到 DEAD、4xx 不重试、replay 后成功、pause 阻止投递 |
+| `BackoffTest` / `BackoffPropertyTest` | 退避指数增长、被上限截断、抖动恒落在 `[cap/2, cap)`；对 200 组随机 `(base, max, attempt)` 成立 |
+| `SigningPropertyTest` | 任意 secret/id/时间戳/body 都能自验签；任一项变化则验签失败；签名长度与十六进制格式恒定 |
+| `SubscriptionPropertyTest` | 订阅匹配是精确匹配；通配符覆盖全部；空白与重复声明不改变语义 |
+| `EgressGuardTest` | 回环/私有/链路本地/CGNAT/保留段全部拒绝（对 IPv4 全空间做属性测试）；白名单与演示模式可覆盖 |
+| `SecretCipherTest` | 每次加密用新 IV；篡改密文或换主密钥则解密失败 |
+| `DeliveryStatusTest` | 状态机语义与文档一致 |
+| `EventIngestIT` | 20 并发同幂等键 → 1 个事件；扇出过滤；claim 互斥；lease 回收；outbox 唯一键允许下一轮 |
+| `EndToEndDeliveryIT` | 真实链路 2xx/5xx/4xx/replay/pause 五种结局 |
+| `ReceiverFaultIT` | 慢接收方 → `TIMEOUT`；连接被拒 → `CONNECT_ERROR`；故障消失后**同一个** delivery 自动成功 |
+| `BrokerOutageIT` | broker 冻结期间事件仍被接受、不产生任何 attempt、工作停在 outbox；恢复后自动追平且只尝试一次 |
+| `OutboxCrashWindowIT` | 「确认后崩溃」窗口：sweeper 重新武装 → 消息重复 → attempt 护栏吸收，接收方只看到一次尝试 |
 
-**为什么坚持用容器而不是 H2**：`FOR UPDATE SKIP LOCKED`、JSON 列、CHECK 约束、quorum queue 这些行为在替代品里都不一样。更关键的是——下面两个真实缺陷只有"真实 MySQL + 不同时区的 JVM"才能暴露，H2 跑在同一个进程里会全部掩盖：
+**为什么坚持用容器而不是 H2**：`FOR UPDATE SKIP LOCKED`、JSON 列、CHECK 约束、quorum queue 这些行为在替代品里都不一样。更重要的是——下面三个真实缺陷只有"真实 MySQL + 真实 RabbitMQ + 与数据库不同时区的 JVM"才能暴露，H2 同进程跑会全部掩盖：
 
 | 缺陷 | 一句话 | 文档 |
 |---|---|---|
 | 0001 | 并发幂等时输掉竞争的一方返回 500（REPEATABLE READ 快照看不到赢家） | [docs/failures/0001](docs/failures/0001-idempotent-race-snapshot.md) |
 | 0002 | 重试永不触发（JVM 是 UTC+8，MySQL 是 UTC，两个时钟被拿来比较） | [docs/failures/0002](docs/failures/0002-two-clocks.md) |
+| 0003 | broker 停机时 outbox 行卡在 PUBLISHING（异常类型没被接住） | [docs/failures/0003](docs/failures/0003-publisher-send-outside-try.md) |
 
-这两个文档比任何功能都更能说明这个项目被真正跑过。
+这三个文档比任何功能列表都更能说明这个项目被真正跑过。
+
+## 故障演练（真实进程，真实依赖故障）
+
+`./scripts/drill.ps1` 把三个角色作为独立 JVM 启动，然后真的杀进程、真的停容器。完整记录在 `docs/failures/0004`–`0006`。
+
+```bash
+docker compose up -d            # 若 3306 被占用：DB_PUBLISH_PORT=13306 docker compose up -d
+./scripts/drill.ps1 -DbPort 13306      # 约 3 分钟
+```
+
+| 演练 | 动作 | 实测结果 |
+|---|---|---|
+| **D1** | `kill -9` relay，期间提交 5 个事件 | 5 行停在 outbox；重启后 **4 秒**追平；5 个事件全部 `attemptCount=1` |
+| **D2** | `kill -9` worker（请求进行中） | attempt 1 → `ABANDONED / LEASE_EXPIRED`，attempt 2 → `SUCCEEDED`；**11 秒**收敛；编号连续无重复 |
+| **D3** | 停 Redis、暂停 RabbitMQ | 事件均被接受；工作停在 outbox；恢复后 **2 秒**追平，无额外尝试 |
+
+自动化测试与演练的分工写在 [ADR-0008](docs/adr/0008-fault-injection-tooling.md)：精密的时间窗口由确定性测试覆盖，进程崩溃的运行时行为由演练覆盖。**两者不能互相替代。**
 
 ---
 
@@ -297,6 +321,9 @@ GET /actuator/prometheus
 | `hookflow.retry.default-max-attempts` | 8 | 默认最大尝试次数 |
 | `hookflow.rate-limit.enabled` | true | Redis 租户限流开关 |
 | `hookflow.rate-limit.fail-open` | true | **Redis 挂掉时：放行（true）还是拒绝（false）** |
+| `hookflow.security.egress.allow-private-targets` | **false** | SSRF 防护：默认拒绝回环/私有/链路本地/云元数据地址。仅 `all`（本地演示）profile 打开 |
+| `hookflow.security.egress.allowed-hosts` | `[]` | 显式放行的 host 白名单，优先于范围检查 |
+| `hookflow.relay.retention-days` | 7 | PUBLISHED 的 outbox 行保留天数，0 关闭清理 |
 | `hookflow.security.master-key` | 环境变量 | ≥32 字符；**丢失等于所有 endpoint 密钥作废** |
 
 环境变量：`DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` `MQ_HOST` `MQ_PORT` `REDIS_HOST` `REDIS_PORT` `HOOKFLOW_MASTER_KEY` `HOOKFLOW_BOOTSTRAP_TOKEN`。
@@ -319,22 +346,24 @@ GET /actuator/prometheus
 
 ## 已知限制 / 路线图
 
-**v0.1 明确的限制**（不掩饰）：
+**当前限制（不掩饰）**：
 
 - 单 region、单 MySQL 主库，没有分片
-- 管理端只有 REST，没有 UI
-- 没有 SDK
-- 压测数据尚未提供（v0.3）
-- 顺序投递未实现
-- 每租户限流是固定窗口，不是令牌桶
+- 管理端只有 REST，没有 UI；没有 SDK
+- 顺序投递未实现（明确列为「不保证」）
+- 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
+- 无背压、无租户公平调度：一个大租户可以把 worker 线程池占满
+- SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
+- 压测与 JVM 调优数据尚未提供（v0.3）
+- 分布式 trace 尚未贯通（v0.3）
 
 **规划**：
 
-| 版本 | 内容 |
-|---|---|
-| v0.2 | 故障注入自动化（Toxiproxy）、属性测试、OpenTelemetry trace 贯通、`docs/failures/` 真实演练记录 |
-| v0.3 | 多租户公平调度（防大租户饿死小租户）、背压与降载、wrk2 无 coordinated-omission 延迟测量、JFR + 火焰图 + GC 调优数据 |
-| v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK |
+| 版本 | 内容 | 状态 |
+|---|---|---|
+| v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
+| v0.3 | 多租户公平调度、背压与降载、wrk2 无 coordinated-omission 延迟测量、JFR + 火焰图 + GC 调优数据、OpenTelemetry trace 贯通 | 计划中 |
+| v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK | 计划中 |
 
 ---
 
