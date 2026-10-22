@@ -105,6 +105,10 @@ services:
       # Containerised demo exports traces; a host-run demo keeps them off.
       OTLP_EXPORT: ${OTLP_EXPORT:-true}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://jaeger:4318/v1/traces}
+      # The demo console (/demo/) provisions its own tenants and its /v1/demo/** API
+      # has no authentication. Fine for a local stack; set to false if this port is
+      # reachable by anyone else. See docs/demo.md.
+      HOOKFLOW_DEMO_ENABLED: ${HOOKFLOW_DEMO_ENABLED:-true}
       TZ: UTC
     ports:
       - "8080:8080"

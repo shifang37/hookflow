@@ -125,6 +125,23 @@ docker compose up -d           # 本机 3306 被占用时：DB_PUBLISH_PORT=1330
 静态页本身（`/demo/index.html`）在任何 profile 下都能打开，因为它是普通静态资源；但它只能显示一句
 「未启用」——它调用的 `/v1/demo/state` 在那边是 404。页面不缓存任何数据，所以也没有信息泄漏。
 
+### 容器里也会起来
+
+`Dockerfile` 的入口是 `java -jar`，默认 profile 是 `all`，所以 `docker compose --profile full up -d`
+起来的那个容器**也会带控制台**（在容器内 `127.0.0.1:9199` 上起假客户，worker 在同一进程里，所以照常投递）。
+
+这是给本地演示用的。**如果你把 8080 暴露到能被别人访问的地方，先关掉它：**
+
+```bash
+HOOKFLOW_DEMO_ENABLED=false docker compose --profile full up -d
+```
+
+验证方式：
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' http://localhost:8080/v1/demo/state   # 期望 404
+```
+
 ---
 
 ## 5. 它证明了什么（以及没证明什么）
