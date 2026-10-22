@@ -34,6 +34,18 @@ jobs:
       - name: Unit + integration tests
         run: ./mvnw -B verify -DskipITs=false
 
+      # A failure that only shows "exit code 1" wastes a whole iteration. The reports
+      # contain the actual assertion text, so put them in the log.
+      - name: Show failed test reports
+        if: failure()
+        run: |
+          for f in target/failsafe-reports/*.txt target/surefire-reports/*.txt; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            sed -n '1,80p' "$f"
+            echo "::endgroup::"
+          done
+
       - name: Package
         run: ./mvnw -B -DskipTests package
 

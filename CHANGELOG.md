@@ -46,6 +46,8 @@
 ### 修复
 
 - **批量取消 vs 逐行认领死锁**（[failures/0007](docs/failures/0007-cancel-vs-claim-deadlock.md)）：`EndpointService.pause` 做批量 `UPDATE`，与 worker 按主键逐行认领的加锁顺序相反，1 500 行并发时被 InnoDB 选为牺牲者。改为事务级重试（3 次递增退避），`EndpointPauseRetryTest` 覆盖。v0.2 的测试每次只有一两条 delivery，撞不上
+- **CI 从来没跑过**：workflow 只监听 `main`（默认分支是 `master`），且 `mvnw` 是 mode 644，在 Linux 上 `./mvnw` 会 Permission denied。两处都修了；第一次真实运行立刻抓到一个 flaky 集成测试
+- **`ReceiverFaultIT.refusedConnectionIsConnectError` 在 CI 上偶发失败**：它用"刚释放的临时端口"制造连接拒绝，CI 上该端口可能在投递前被别的监听者占用，于是 attempt **成功**、`error_class` 为 null。改为固定端口 1（非特权进程永不监听），并按 `(event, endpoint)` 精确定位 delivery（多 endpoint 时扇出顺序未定义，"最新一条"不是那条）；断言消息里带上 attempt 状态。CI 失败时现在会把测试报告打进日志
 
 ### 变更
 
