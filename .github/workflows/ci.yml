@@ -2,7 +2,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # master is this repository's default branch; main is kept so a future rename
+    # does not silently stop CI again (it listened only on main until v0.3, and
+    # therefore never ran at all).
+    branches: [master, main]
   pull_request:
 
 concurrency:
