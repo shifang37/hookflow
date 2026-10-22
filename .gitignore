@@ -1,0 +1,28 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IDE ###
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Local runtime ###
+logs/
+*.log
+build.log
+build-it.log
+.env
+hookflow-data/
+bench-results/

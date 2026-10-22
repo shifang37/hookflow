@@ -1,0 +1,6 @@
+# Role: relay
+# Turns outbox rows into broker messages. Holds no consumer, so a relay restart
+# cannot interrupt an in-flight delivery.
+hookflow:
+  relay:
+    interval-ms: 200

@@ -1,0 +1,89 @@
+name: hookflow
+
+# Local demo stack. Everything a reviewer needs to see the full delivery path:
+#   docker compose up -d
+#   java -cp target/classes dev.hookflow.tools.MockReceiver 9099 <signing-secret>
+#   ./scripts/demo.ps1        (or ./scripts/demo.sh)
+#
+# MySQL is pinned to an LTS line; Redis and RabbitMQ are pinned to a major line
+# on purpose so that a patch upgrade never changes delivery semantics silently.
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: hookflow-mysql
+    command:
+      - --innodb-flush-log-at-trx-commit=1
+      - --max-connections=300
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: hookflow
+      MYSQL_USER: hookflow
+      MYSQL_PASSWORD: hookflow
+      TZ: UTC
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uhookflow", "-phookflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    container_name: hookflow-redis
+    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: hookflow-rabbitmq
+    hostname: hookflow-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: hookflow
+      RABBITMQ_DEFAULT_PASS: hookflow
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hookflow-app
+    profiles: ["full"]
+    environment:
+      DB_HOST: mysql
+      MQ_HOST: rabbitmq
+      REDIS_HOST: redis
+      HOOKFLOW_MASTER_KEY: ${HOOKFLOW_MASTER_KEY:-hookflow-dev-master-key-change-in-production-32}
+      HOOKFLOW_BOOTSTRAP_TOKEN: ${HOOKFLOW_BOOTSTRAP_TOKEN:-hookflow-dev-bootstrap-token}
+      TZ: UTC
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  rabbit-data:

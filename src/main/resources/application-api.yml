@@ -1,0 +1,11 @@
+# Role: api
+# Accepts events and serves queries. Deliberately owns no consumer and no
+# relay loop, so scaling the API out never multiplies delivery work.
+spring:
+  rabbitmq:
+    listener:
+      simple:
+        auto-startup: false
+hookflow:
+  rate-limit:
+    fail-open: true

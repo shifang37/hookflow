@@ -1,0 +1,13 @@
+# Role: worker
+# Consumes delivery work and calls customer endpoints. Scale out freely: the
+# attempt-count fence makes duplicate messages harmless.
+spring:
+  rabbitmq:
+    listener:
+      simple:
+        prefetch: ${MQ_PREFETCH:8}
+        concurrency: 2
+        max-concurrency: 8
+hookflow:
+  lease:
+    ttl-seconds: 60

@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Unit tests need no containers: this is the fast feedback loop.
+      - name: Unit tests
+        run: ./mvnw -B test
+
+      # `verify` runs the failsafe ITs, which start MySQL and RabbitMQ through
+      # Testcontainers and assert the behaviours this project claims to guarantee.
+      - name: Unit + integration tests
+        run: ./mvnw -B verify -DskipITs=false
+
+      - name: Package
+        run: ./mvnw -B -DskipTests package
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
