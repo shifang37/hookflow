@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HookFlow 演示控制台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="logo">HF</div>
+    <div>
+      <h1>HookFlow 演示控制台</h1>
+      <p class="sub">浏览器 → API → MySQL outbox → relay → RabbitMQ → worker → 客户接收方。页面上每个数字都来自这条真实链路。</p>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis">
+    <div class="kpi"><span class="label">投递/秒</span><b id="kpi-delivered">—</b></div>
+    <div class="kpi"><span class="label">outbox 积压</span><b id="kpi-backlog">—</b></div>
+    <div class="kpi"><span class="label">429/秒</span><b id="kpi-shed">—</b></div>
+    <div class="kpi"><span class="label">在途</span><b id="kpi-inflight">—</b></div>
+    <div class="kpi"><span class="label">重试排队</span><b id="kpi-retry">—</b></div>
+  </div>
+
+  <div class="chips">
+    <span class="chip" id="chip-fairness">公平调度：—</span>
+    <span class="chip" id="chip-watermark">租户水位：—</span>
+    <a class="chip link" id="chip-jaeger" href="http://localhost:16686" target="_blank" rel="noreferrer">Jaeger ↗</a>
+  </div>
+</header>
+
+<section class="scenarios">
+  <div class="scenario-buttons">
+    <button class="scenario" data-scenario="normal"><span>①</span>正常投递</button>
+    <button class="scenario" data-scenario="broken"><span>②</span>客户挂了</button>
+    <button class="scenario" data-scenario="fair"><span>③</span>大租户饿死小租户</button>
+    <button class="scenario" data-scenario="budget"><span>④</span>加上并发预算</button>
+    <button class="scenario" data-scenario="overload"><span>⑤</span>过载与降载</button>
+  </div>
+  <p id="scenario-note" class="note">点一个场景：控制台会替你操作<b>真实系统</b>（改接收方行为、灌事件、改租户预算），然后看下面的数字怎么变。</p>
+</section>
+
+<main>
+  <section class="col">
+    <article class="card">
+      <h2>模拟业务系统 <small>两个客户的订单服务，走公开 HTTP API</small></h2>
+      <div class="controls">
+        <button class="btn" id="sim-toggle">暂停</button>
+        <label class="slider">
+          速率 <input id="rate" type="range" min="0" max="200" step="1" value="4">
+          <output id="rate-out">4</output>/s
+        </label>
+      </div>
+      <div id="streams" class="streams"></div>
+      <p class="hint">「发送」是业务系统提交的事件数，「接受」是拿到 202 的数，「被限流」是拿到 429/503 的数——业务系统自己会看到这些。</p>
+    </article>
+
+    <article class="card">
+      <h2>手动操作</h2>
+      <div class="controls wrap">
+        <button class="btn" data-act="burst" data-tenant="acme" data-count="500">给 acme 灌 500 条</button>
+        <button class="btn" data-act="burst" data-tenant="quick" data-count="50">给 quick 灌 50 条</button>
+        <button class="btn" data-act="one" data-tenant="quick" data-count="10">让 quick 提交 10 条</button>
+        <button class="btn" data-act="budget" data-tenant="acme" data-value="4">acme 预算 → 4</button>
+        <button class="btn" data-act="budget" data-tenant="acme" data-value="0">acme 预算 → 不限</button>
+        <button class="btn ghost" data-act="reset">清空演示数据</button>
+      </div>
+    </article>
+  </section>
+
+  <section class="col wide">
+    <article class="card">
+      <h2>投递流水 <small>最近 40 条；DEAD 的行可以点「重放」</small></h2>
+      <div class="table-wrap">
+        <table id="deliveries">
+          <thead>
+          <tr>
+            <th>#</th><th>租户</th><th>事件</th><th>类型</th><th>状态</th>
+            <th>尝试</th><th>延迟</th><th>错误</th><th></th>
+          </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <section class="col">
+    <article class="card">
+      <h2>客户接收方 <small>真实的 HTTP 服务，自己验签</small></h2>
+      <div class="controls wrap">
+        <button class="btn" data-rec="OK" data-delay="0">正常 200</button>
+        <button class="btn" data-rec="OK" data-delay="300">慢 300ms</button>
+        <button class="btn" data-rec="ERROR" data-delay="0">返回 500</button>
+        <button class="btn" data-rec="SLOW" data-delay="0">超时 5s</button>
+        <button class="btn" data-rec="REJECT" data-delay="0">断连</button>
+      </div>
+      <div class="recv-mode-line" id="recv-mode"></div>
+      <div class="recv-stats" id="recv-stats"></div>
+      <ul class="hooks" id="hooks"></ul>
+    </article>
+
+    <article class="card">
+      <h2>公平性 <small>每个租户自己的端到端延迟</small></h2>
+      <div id="fairness" class="fairness"></div>
+      <p class="hint">延迟 = 事件被接受 → 投递成功（含排队）。预算越小，这个租户的积压越少地挡在别人前面。</p>
+    </article>
+  </section>
+</main>
+
+<footer>
+  <div class="spark">
+    <h3>投递/秒</h3>
+    <svg id="spark-rate" viewBox="0 0 200 48" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="spark">
+    <h3>outbox 积压</h3>
+    <svg id="spark-backlog" viewBox="0 0 200 48" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="spark">
+    <h3>429/秒</h3>
+    <svg id="spark-shed" viewBox="0 0 200 48" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="legend" id="state-line"></div>
+</footer>
+
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

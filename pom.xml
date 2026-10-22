@@ -13,7 +13,7 @@
 
   <groupId>dev.hookflow</groupId>
   <artifactId>hookflow</artifactId>
-  <version>0.3.0-SNAPSHOT</version>
+  <version>0.3.1-SNAPSHOT</version>
   <name>hookflow</name>
   <description>Reliable multi-tenant webhook delivery platform</description>
 

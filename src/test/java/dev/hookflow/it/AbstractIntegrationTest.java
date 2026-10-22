@@ -20,7 +20,7 @@ import org.testcontainers.containers.RabbitMQContainer;
  * whole suite pays the startup cost once.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
-@ActiveProfiles("all")
+@ActiveProfiles({"all", "test"})
 public abstract class AbstractIntegrationTest {
 
     protected static final MySQLContainer<?> MYSQL =

@@ -47,7 +47,17 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         // Admin bootstrap is guarded by an operator token, not by tenant keys.
-        return !path.startsWith("/v1/") || path.startsWith("/v1/admin/");
+        if (path.startsWith("/v1/admin/")) {
+            return true;
+        }
+        // The demo console's API has no credential: a tenant key in browser JS would
+        // look like a security boundary while being readable in dev tools. The real
+        // boundary is that the controller bean does not exist unless
+        // hookflow.demo.enabled=true (local `all` profile only) - see docs/demo.md.
+        if (path.startsWith("/v1/demo/")) {
+            return true;
+        }
+        return !path.startsWith("/v1/");
     }
 
     @Override

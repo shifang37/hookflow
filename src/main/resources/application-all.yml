@@ -11,3 +11,31 @@ hookflow:
   security:
     egress:
       allow-private-targets: true
+
+  # The interactive console: http://localhost:8080/demo/
+  #
+  # It is on only here. The console provisions tenants and its /v1/demo/** API has
+  # no authentication, so it must never be enabled outside a local demo.
+  demo:
+    enabled: true
+    receiver-port: 9199
+    simulator-rate-per-second: 4
+
+  delivery:
+    # Deliberately tighter than the 10s production default: with a 3s read timeout
+    # the console can demonstrate the TIMEOUT path (put the fake receiver into
+    # "slow" mode) in five seconds instead of a minute.
+    read-timeout-ms: 3000
+
+  retry:
+    # Demo-sized backoff. The production ladder (5s base, 1h cap) means a dead
+    # letter is ~15 minutes away, which is unfilmable; here it is ~10 seconds, and
+    # every step of the ladder is still the real one (base * 2^n with jitter).
+    base-delay-ms: 800
+    max-delay-ms: 6000
+
+  backpressure:
+    # Demo-sized on purpose. The production default is 10 000, which is a number
+    # you can never reach by clicking; 200 lets the console show a real 429 and a
+    # backlog that drains when you stop flooding.
+    tenant-high-watermark: 200

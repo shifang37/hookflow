@@ -1,0 +1,14 @@
+# Test-only profile defaults, on top of `all`.
+#
+# Why this file exists: the `all` profile is what a reviewer runs locally, and it
+# turns the demo console on (that is the whole point of the console). Integration
+# tests also run with `all`, so without this file every test context would try to
+# bind the demo receiver on 127.0.0.1:9199 - the first one wins and the other 22
+# contexts fail with "Address already in use". It would also flood the shared
+# database with demo traffic and create two extra tenants out of nowhere.
+#
+# DemoConsoleIT is the one test that needs the console, and it turns it back on with
+# `@SpringBootTest(properties = ...)`, which outranks this file.
+hookflow:
+  demo:
+    enabled: false

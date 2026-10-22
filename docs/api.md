@@ -220,6 +220,27 @@ curl -X POST localhost:8080/v1/events \
 
 ---
 
+## 演示控制台 API（仅本地 `all` profile）
+
+这些接口**不需要 API Key**，也**只在** `spring.profiles.active=all` 且
+`hookflow.demo.enabled=true` 时存在（其他 profile 下是 404，不是「有密码」）。原因见
+[demo.md](demo.md) §4。
+
+| 方法 | 路径 | 参数 | 作用 |
+|---|---|---|---|
+| `GET` | `/v1/demo/state` | — | 页面每秒轮询的全量状态（平台、模拟器、接收方、租户、投递流水） |
+| `POST` | `/v1/demo/simulator` | `running`, `rate` | 启停模拟业务系统 / 改速率（每租户 0–200/秒） |
+| `POST` | `/v1/demo/receiver` | `mode`, `delayMillis` | `OK` / `ERROR` / `SLOW` / `REJECT`；OK 模式下可加延迟（≤2000ms） |
+| `POST` | `/v1/demo/burst` | `tenantId`, `count`, `perSecond` | 灌事件（走真实 HTTP，`perSecond=0` 表示全速） |
+| `POST` | `/v1/demo/tenants/{id}/budget` | `maxInFlight` | 改租户并发预算并立刻刷新调度器快照 |
+| `POST` | `/v1/demo/tenants/{id}/event` | — | 让该租户的业务系统提交一条事件 |
+| `POST` | `/v1/demo/deliveries/{id}/replay` | — | 重放死信（等价于 `/v1/deliveries/{id}/replay`） |
+| `POST` | `/v1/demo/reset` | — | 停模拟、把演示租户的事件/投递/outbox 清空（带重试） |
+
+`GET /` 在演示启用时重定向到 `/demo/index.html`。
+
+---
+
 ## 健康检查与指标
 
 | 路径 | 说明 |

@@ -50,7 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * client's own reconnection logic. See {@code docs/adr/0008-fault-injection-tooling.md}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
-@ActiveProfiles("all")
+@ActiveProfiles({"all", "test"})
 class BrokerOutageIT {
 
     private static final MySQLContainer<?> MYSQL =

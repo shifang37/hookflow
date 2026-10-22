@@ -17,6 +17,7 @@
 | [0009](0009-fair-scheduling.md) | 公平调度放在 outbox → broker 边界（准入 + 加权轮询），不分片队列 | 已采纳 |
 | [0010](0010-backpressure-and-shedding.md) | 过载在入口淘汰（429/503 + Retry-After），内部只设上限 | 已采纳 |
 | [0011](0011-distributed-tracing.md) | trace 上下文进 payload，同时也在 AMQP header；用 W3C 标准 | 已采纳 |
+| [0012](0012-demo-console.md) | 演示控制台打进应用（静态页 + 条件 bean），不做独立前端工程 | 已采纳 |
 
 ## 模板
 

@@ -102,7 +102,8 @@ class BacklogGateTest {
                 null, null, null, null,
                 new HookFlowProperties.Fairness(true, 200),
                 new HookFlowProperties.Backpressure(outboxWatermark, tenantWatermark, 7, 60_000),
-                new HookFlowProperties.Worker("defer"));
+                new HookFlowProperties.Worker("defer"),
+                null);
         return new BacklogGate(outboxMapper, properties, meterRegistry);
     }
 }

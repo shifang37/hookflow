@@ -101,6 +101,7 @@ class EndpointPauseRetryTest {
                 null, null, null,
                 new HookFlowProperties.Fairness(true, 1_000),
                 new HookFlowProperties.Backpressure(100_000, 10_000, 5, 500),
-                new HookFlowProperties.Worker("defer"));
+                new HookFlowProperties.Worker("defer"),
+                null);
     }
 }

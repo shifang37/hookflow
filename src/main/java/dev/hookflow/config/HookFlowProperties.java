@@ -23,7 +23,8 @@ public record HookFlowProperties(
         Admin admin,
         Fairness fairness,
         Backpressure backpressure,
-        Worker worker) {
+        Worker worker,
+        Demo demo) {
 
     /** Outbound HTTP behaviour towards customer endpoints. */
     public record Delivery(
@@ -152,5 +153,25 @@ public record HookFlowProperties(
      *                           attempt fence re-arm
      */
     public record Worker(String overCapacityPolicy) {
+    }
+
+    /**
+     * The interactive demo console.
+     *
+     * <p>It is a <b>simulated business system plus a browser control panel</b>
+     * ({@code /demo/}) that drives the real pipeline: real API keys, real HTTP
+     * requests, real MySQL rows, real retries. Nothing in the demo is mocked except
+     * the customer's endpoint, which is a small HTTP server inside the same process
+     * so that the page can show what a receiver actually gets.
+     *
+     * <p>It is off everywhere except the local {@code all} profile, because it
+     * provisions tenants and exposes an <em>unauthenticated</em> {@code /v1/demo/**}
+     * API. Enabling it in a deployment would be a security hole, not a feature flag.
+     *
+     * @param enabled               expose the console and start the simulator
+     * @param receiverPort          port of the in-process fake customer endpoint
+     * @param simulatorRatePerSecond default events per second of the simulated business systems
+     */
+    public record Demo(boolean enabled, int receiverPort, int simulatorRatePerSecond) {
     }
 }

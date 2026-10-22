@@ -51,6 +51,33 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 
 ---
 
+## 演示控制台：点一下就能看到它是怎么工作的
+
+![演示控制台](docs/demo-console.png)
+
+```bash
+docker compose up -d
+./mvnw spring-boot:run        # → http://localhost:8080/demo/
+```
+
+页面里有一个**模拟业务系统**（两个租户的订单服务，跑真实的订单生命周期，通过带 API Key 的公开
+HTTP API 提交事件）和一个**假客户接收方**（真 HTTP、自己验 HMAC、可以被切成返回 500 / 慢 5 秒 / 断连）。
+按钮只做「改配置、灌事件」，流量走的是真实链路：API → MySQL outbox → relay → RabbitMQ → worker → 接收方。
+
+五个场景，每个对应 v0.3 的一条主张：
+
+| 场景 | 你会看到什么 |
+|---|---|
+| ① 正常投递 | 每条约 100–300ms 成功，接收方验签 ✓，每条 webhook 带同一 trace id |
+| ② 客户挂了 | `RETRY_WAIT` → 尝试 5/5 按 `base×2ⁿ` 退避 → `DEAD` → 点「重放」用新的一次尝试救回来 |
+| ③ 大租户饿死小租户 | 预算「不限」+ 300 条洪水，受害者租户 p99 被拖到秒级（v0.2 行为） |
+| ④ 加上并发预算 | 只把洪水租户的预算改成 4，受害者 p99 掉到百毫秒级，而积压总量不变 |
+| ⑤ 过载与降载 | 到达率拉到 200/s：429 上升、积压顶在水位线、p99 不爆炸；降速后积压自己排空 |
+
+细节（含**为什么它可以没有鉴权**、以及**它没有证明什么**）：[docs/demo.md](docs/demo.md)。
+
+---
+
 ## 60 秒跑通
 
 ```bash
@@ -265,7 +292,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 ```bash
 ./mvnw test      # 73 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 73 单元 + 23 集成 = 96 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（约 6 分钟）
+./mvnw verify    # 73 单元 + 28 集成 = 101 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（约 7 分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -289,6 +316,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | `FairnessIT` | 同一场景跑两遍，只改洪水租户的并发预算：受害租户 p99 **4 584ms → 190ms** |
 | `BackpressureIT` | 真实 HTTP：积压超水位 → `429` + `Retry-After`；恢复后已接受的事件全部投递成功、租户被重新放行 |
 | `TracingIT` | 接收方收到的 `traceparent` 与 API 返回的 `X-HookFlow-Trace-Id` 是**同一个 trace**（5 跳一条链路） |
+| `DemoConsoleIT`（5） | 演示控制台不是动画：模拟业务系统的流量真的产生投递、接收方真的验签、5xx 真的走到死信并能重放、预算按钮真的改库 |
 
 **为什么坚持用容器而不是 H2**：`FOR UPDATE SKIP LOCKED`、JSON 列、CHECK 约束、quorum queue 这些行为在替代品里都不一样。更重要的是——下面三个真实缺陷只有"真实 MySQL + 真实 RabbitMQ + 与数据库不同时区的 JVM"才能暴露，H2 同进程跑会全部掩盖：
 
@@ -409,6 +437,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - [ADR-0009](docs/adr/0009-fair-scheduling.md) — 为什么公平调度放在 outbox→broker 边界，而不是分片队列或消费端
 - [ADR-0010](docs/adr/0010-backpressure-and-shedding.md) — 为什么过载时在入口淘汰，而不是在内部排队
 - [ADR-0011](docs/adr/0011-distributed-tracing.md) — 为什么 trace 上下文放进 payload，而不仅是 MQ header
+- [ADR-0012](docs/adr/0012-demo-console.md) — 为什么演示控制台打进应用（静态页 + 条件 bean），而不是独立前端工程
 
 ---
 
@@ -424,6 +453,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - `delivery_attempt` 没有保留策略（`outbox` 有）
 - `stale-publishing-seconds` 一个值两用（崩溃窗口 + worker `defer` 延迟），出现真实误判再拆
 - **性能数据只覆盖单机单进程拓扑**，且 wrk2 / async-profiler 两项没有跑成（本机没有二进制、镜像拉取失败），已在 [performance.md §13](docs/performance.md) 明确标注
+- 演示控制台的**前端没有自动化测试**（没有 Playwright）；接口契约由 `DemoConsoleIT` 覆盖，页面本身靠手工与截图验证。而且 `/v1/demo/**` 无鉴权，只应在本地 `all` profile 打开
 
 **规划**：
 
@@ -431,6 +461,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 |---|---|---|
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
+| v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
 | v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK、令牌桶限流 | 计划中 |
 
 ---
@@ -444,6 +475,7 @@ src/main/java/dev/hookflow/
 ├── common/          错误码与统一错误体、requestId、principal 上下文
 ├── config/          配置属性、OpenAPI
 ├── crypto/          HMAC 签名、AES-GCM 密钥加密
+├── demo/            演示控制台后端：模拟业务系统、假客户接收方、/v1/demo/**（仅 all profile）
 ├── domain/          tenant / apikey / endpoint / event / delivery / outbox / audit / fairness
 ├── fairness/        加权轮询、并发预算（准入控制）
 ├── messaging/       RabbitMQ 拓扑（含长度上限）、发布器（publisher confirm）、工作消息
@@ -455,10 +487,16 @@ src/main/java/dev/hookflow/
 ├── tracing/         W3C traceparent 传播、trace id 回显
 └── worker/          投递执行、lease 守护、重试/回收调度、退避算法
 
+src/main/resources/static/demo/
+├── index.html       演示控制台页面（无构建步骤，跟着 jar 一起发）
+├── app.js           轮询 /v1/demo/state 并渲染；按钮只调用控制台 API
+└── style.css
+
 docs/
-├── adr/             11 条架构决策（含本轮新增 0009/0010/0011）
-├── failures/        真实缺陷复盘与演练记录（含本轮新增 0007）
+├── adr/             12 条架构决策（含 0009/0010/0011/0012）
+├── failures/        真实缺陷复盘与演练记录（含 0007）
 ├── perf/            压测原始输出（报告引用的唯一来源）
+├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么
 ├── performance.md   性能报告：方法、数据、瓶颈、优化前后对比
 ├── capacity.md      容量模型：4C8G 能扛多少、先加谁
 └── v0.3-checklist.md 本轮验收清单（哪些做了、哪些没做、为什么）

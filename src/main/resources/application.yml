@@ -153,6 +153,13 @@ hookflow:
     fail-open: true
   admin:
     bootstrap-token: ${HOOKFLOW_BOOTSTRAP_TOKEN:hookflow-dev-bootstrap-token}
+  # --- v0.3: interactive demo console (off outside the local `all` profile) ------
+  demo:
+    # Provisions its own tenants and exposes an UNAUTHENTICATED /v1/demo/** API.
+    # Never enable this in a deployment; see docs/demo.md.
+    enabled: false
+    receiver-port: 9199
+    simulator-rate-per-second: 4
 
 springdoc:
   swagger-ui:

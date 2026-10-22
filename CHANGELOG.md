@@ -3,6 +3,35 @@
 本项目的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+主题：**能点的演示**。一个模拟业务系统 + 一块面板，把 v0.3 讲的那些性质变成看得见的东西。
+
+### 新增 — 演示控制台（`/demo/`）
+
+- **模拟业务系统**：两个租户各自的订单服务，跑真实的 `order.created → order.paid → order.shipped`
+  生命周期，通过**公开 HTTP API**（带真实 API Key）提交事件。不走内部服务调用，因为那样就跳过了
+  认证、限流、背压和 429——恰好是业务系统在过载时真正感觉到的东西
+- **假客户接收方**：应用内一个真实 HTTP 服务（`127.0.0.1:9199/hook/<租户>`），自己用 HMAC 验签，
+  并且可以被切成「返回 500 / 慢 5 秒 / 直接断连」，分别对应 `SERVER_5XX`、`TIMEOUT`、`CONNECT_ERROR`
+- **面板**：每秒轮询 `GET /v1/demo/state`，显示投递流水（含重放按钮）、每租户 p50/p99、outbox 积压、
+  429 速率、接收方最近收到的 webhook 与验签结果、以及每条 webhook 的 trace id
+- **五个场景按钮**：正常投递 / 客户挂了 / 大租户饿死小租户 / 加上并发预算 / 过载与降载。
+  按钮只做「改配置、灌事件」这类操作，流量走真实链路
+- 静态页打进 jar，**没有前端构建步骤**（[ADR-0012](docs/adr/0012-demo-console.md)）
+- `/v1/demo/**` **无鉴权**，但只在 `all` profile + `hookflow.demo.enabled=true` 时存在——安全边界是
+  「bean 不存在」而不是密码（[docs/demo.md](docs/demo.md) §4）
+- `DemoConsoleIT`（5 个用例）：租户供给、模拟流量产生真实投递且接收方验签、5xx→重试→死信→重放恢复、
+  预算按钮真的改库、状态载荷字段完整
+
+### 变更
+
+- `all`（本地演示）profile 增加演示用的取值：租户水位线 200、读超时 3s、退避基数 0.8s。
+  **这些不是生产建议值**，生产默认值未变
+- 演示截图：[demo-console.png](docs/demo-console.png)、[demo-console-retries.png](docs/demo-console-retries.png)
+  （headless Chrome 真实渲染）
+- 测试 96 → **101**（73 单元 + 28 集成）
+
 ## [0.3.0] — 2026-10-22
 
 主题：**用可复现的测量说清瓶颈在哪、扩容先加谁。** 计划的红线是「测不出来就不写数字」，所以本轮的每个数字都指向 `docs/perf/` 下的一份原始输出。
