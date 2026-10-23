@@ -59,6 +59,13 @@ param(
     [string]$MysqlContainer = 'hookflow-mysql',
     [string]$RabbitContainer = 'hookflow-rabbitmq',
     [string]$JvmTuning = '',
+    # Worker / pool knobs (v0.4: the worker is the constraint after B4). 0 keeps the
+    # value from application.yml, so a run that does not pass them measures the
+    # shipped defaults rather than a number that silently drifts when defaults change.
+    [int]$MqConcurrency = 0,
+    [int]$MqMaxConcurrency = 0,
+    [int]$MqPrefetch = 0,
+    [int]$DbPoolSize = 0,
     # Downstream sampling (v0.4 B0). 0 keeps the old behaviour: one snapshot at the end.
     [int]$SampleSeconds = 0,
     [int]$TailSeconds = 0,
@@ -154,6 +161,17 @@ if ($ReceiverDelayMs -gt 0) {
     $receiverQuery = "?delay=$ReceiverDelayMs"
 }
 
+# The worker and pool knobs are read from the environment (application.yml:
+# ${MQ_CONCURRENCY:2}, ${MQ_MAX_CONCURRENCY:8}, ${MQ_PREFETCH:8},
+# ${DB_POOL_SIZE:16}), so they go into the child's .bat instead of $appArgs. They
+# are recorded in meta.txt, because "135 events/s" is meaningless without the
+# concurrency it was measured at.
+$envLines = @()
+if ($MqConcurrency -gt 0) { $envLines += "set MQ_CONCURRENCY=$MqConcurrency" }
+if ($MqMaxConcurrency -gt 0) { $envLines += "set MQ_MAX_CONCURRENCY=$MqMaxConcurrency" }
+if ($MqPrefetch -gt 0) { $envLines += "set MQ_PREFETCH=$MqPrefetch" }
+if ($DbPoolSize -gt 0) { $envLines += "set DB_POOL_SIZE=$DbPoolSize" }
+
 function Stamp($msg) { Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $msg) }
 
 # Every process this run starts carries this marker, so cleanup is exact: matching
@@ -205,7 +223,7 @@ function Stop-Children {
 # tiny .bat instead of being inherited.
 function Start-Background([string]$name, [string]$commandLine) {
     $bat = Join-Path $runDir "$name.bat"
-    $lines = @('@echo off', "set DB_PORT=$DbPort", "set TZ=UTC", $commandLine)
+    $lines = @('@echo off', "set DB_PORT=$DbPort", "set TZ=UTC") + $envLines + @($commandLine)
     Set-Content -Path $bat -Value $lines -Encoding ASCII
     Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
         -Arguments @{ CommandLine = 'cmd.exe /c "' + $bat + '"' } | Out-Null
@@ -812,6 +830,9 @@ try {
     $meta += "java            $javaVersion"
     $meta += "jvm args        $($jvmArgs -join ' ')"
     $meta += "app args        $($appArgs -join ' ')"
+    $workerEnv = 'application.yml defaults (no env override)'
+    if ($envLines.Count -gt 0) { $workerEnv = ($envLines -join '; ') }
+    $meta += "worker env      $workerEnv"
     $meta += "git             $(git rev-parse --short HEAD)"
     $meta += "docker          $(docker version --format '{{.Server.Version}}')"
     $meta += "started         $stamp"

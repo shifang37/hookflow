@@ -32,14 +32,19 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 这台机器（i5-14600K 14C/20T、31.7GB、MySQL 8.4 in Docker、`all` profile 单 JVM、payload 2KB、开环压测）。
 **"入口能接多少"和"平台能送多少"是两个数字，差一个数量级——所以分开写。**
 
-| 入口形态 | 到达率 | 接受率 | 开环 p50 / p99 | **平台持续投递** |
+| 入口形态 | 到达率 | 接受率 | 开环 p50 / p99 | **平台持续投递（端到端）** |
 |---|---:|---:|---|---:|
 | 单条 `POST /v1/events` | 300 events/s | 100% | 33 / 111 ms | — |
-| 批量 20 条 | 450 events/s | 100% | 40 / **75 ms** | B4 前 41/s → **B4 后 400–466/s** |
-| 批量 20 条 | 900 events/s | 100% | 41 / **103 ms** | B4 前 39/s → **B4 后 390–460/s** |
+| 批量 20 条 | 450 events/s | 100% | 40 / **75 ms** | 41/s → **264/s**（worker 16 并发） |
+| 批量 20 条 | 900 events/s | 100% | 41 / **103 ms** | 39/s → **≥390/s**（relay 先满） |
 
-**结论：入口能接 900 events/s（批量，p99 103ms），但平台每秒真正送到客户的只有 400–466 events/s——而且这个上限
-是 relay 的，不是入口的。** 投递侧现在最紧的是 **worker（每次投递两次提交），实测 135–190 events/s**。
+**结论：入口能接 900 events/s（批量，p99 103ms），但平台每秒真正送到客户的只有 ~264/s——这个上限来自 worker
+（每次投递两次提交），不是入口。** 两边的上限现在已经很接近（relay 400–466/s、worker 273–296/s），
+再往上就要合并提交次数：worker 的 settle，或 relay 的 claim/标记（[capacity.md §6](docs/capacity.md)）。
+
+> 两次提升各有证据：B4 把 relay 的「逐条 confirm + 单行 UPDATE」批量化（41 → 400–466/s，[§16](docs/performance.md)、
+> [ADR-0014](docs/adr/0014-batched-relay-publish.md)）；B5 把 worker 并发 8→16 并去掉 2→8 的爬坡
+> （158 → 283/s，[§18](docs/performance.md)）。prefetch 与连接池那一格也量了：prefetch 没用，池在 16 并发时刚好卡住。
 
 三个最能说明问题的数字：
 
@@ -304,7 +309,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 ```bash
 ./mvnw test      # 96 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 105 单元 + 36 集成 = 141 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 5 分 13 秒）
+./mvnw verify    # 105 单元 + 36 集成 = 141 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 4 分 08 秒）
 ```
 
 | 测试 | 证明的命题 |
@@ -432,6 +437,9 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | `hookflow.fairness.enabled` | true | 公平调度总开关。`false` = v0.2 行为（按 id 发布、无准入），用于对照测量 |
 | `hookflow.fairness.refresh-interval-ms` | 1000 | 在途计数刷新周期；越短预算越紧、查询越多 |
 | `hookflow.worker.over-capacity-policy` | defer | 消息到达时租户/端点已满：`defer`（交给恢复器，最多等一个 stuck-scan 周期）或 `requeue`（立刻退回队列，烧 CPU） |
+| `spring.rabbitmq.listener.simple.concurrency`（`MQ_CONCURRENCY`） | **8** | worker 并发（= 同时在途的投递数）。v0.4 实测：8 → 158/s，16 → 273/s；从 2 起步的爬坡会浪费前 ~30 s，所以默认就是 8（[§18](docs/performance.md)） |
+| `spring.rabbitmq.listener.simple.max-concurrency`（`MQ_MAX_CONCURRENCY`） | **16** | 有积压时最多加到几个消费者。16 是"relay 追上来之前"的值：32 没有再快（那时 relay 先满），却会让慢接收方同时挨 32 个请求 |
+| `spring.rabbitmq.listener.simple.prefetch`（`MQ_PREFETCH`） | 8 | 一个消费者最多囤几条未确认消息。**实测对吞吐没有影响**（8 vs 32 在噪声内），调大只会把 `unacked` 从 64 抬到 512 |
 | `hookflow.backpressure.outbox-high-watermark` | 100000 | 平台级未发布积压 → `503` + `Retry-After`；0 关闭 |
 | `hookflow.backpressure.tenant-high-watermark` | 10000 | 租户级未发布积压 → `429` + `Retry-After`；**应按"目标等待 × 排空速率"定，不是越大越好**（见 capacity.md） |
 | `hookflow.backpressure.retry-after-seconds` | 5 | 降载响应里的 `Retry-After` |
@@ -440,7 +448,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | `management.otlp.tracing.export.enabled` | **false** | 是否真的把 span 发出去；默认关闭，测试与生产都不依赖 collector |
 | `hookflow.security.master-key` | 环境变量 | ≥32 字符；**丢失等于所有 endpoint 密钥作废** |
 
-环境变量：`DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` `DB_POOL_SIZE` `MQ_HOST` `MQ_PORT` `MQ_CONCURRENCY` `MQ_PREFETCH` `MQ_MAX_QUEUE_LENGTH` `REDIS_HOST` `REDIS_PORT` `HOOKFLOW_MASTER_KEY` `HOOKFLOW_BOOTSTRAP_TOKEN` `FAIRNESS_ENABLED` `OUTBOX_HIGH_WATERMARK` `TENANT_HIGH_WATERMARK` `WORKER_OVER_CAPACITY_POLICY` `TRACING_ENABLED` `TRACING_SAMPLE` `OTLP_EXPORT` `OTLP_ENDPOINT`。
+环境变量：`DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` `DB_POOL_SIZE` `MQ_HOST` `MQ_PORT` `MQ_CONCURRENCY` `MQ_MAX_CONCURRENCY` `MQ_PREFETCH` `MQ_MAX_QUEUE_LENGTH` `REDIS_HOST` `REDIS_PORT` `HOOKFLOW_MASTER_KEY` `HOOKFLOW_BOOTSTRAP_TOKEN` `FAIRNESS_ENABLED` `OUTBOX_HIGH_WATERMARK` `TENANT_HIGH_WATERMARK` `WORKER_OVER_CAPACITY_POLICY` `TRACING_ENABLED` `TRACING_SAMPLE` `OTLP_EXPORT` `OTLP_ENDPOINT`。
 
 ---
 

@@ -20,6 +20,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -56,23 +57,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FairnessIT extends AbstractIntegrationTest {
 
     /**
-     * Receiver latency: long enough that the consumer is <b>slower than the ingest
-     * loop</b> (8 workers / 200 ms = 40 events/s vs ~50 events/s ingested one by
-     * one), so the flood really does build a queue.
-     *
-     * <p>It was 50 ms until v0.4's B4. At 50 ms the consumer ran at ~160/s, which is
-     * faster than the ingest loop — the only reason a queue existed back then was
-     * that the relay could publish just 41 rows/s, i.e. the test was unknowingly
-     * measuring "the outbox is the bottleneck". Batching the relay
-     * (ADR-0014) made it fast enough to keep up with ingestion, so the accident went
-     * away and the unbounded victim no longer waited behind anything (158 ms).
-     * The fix is to build the queue with the receiver, which is where it is built in
-     * production too.
+     * Receiver latency. It only decides how fast the flood drains; the queue itself
+     * is built by submitting the flood faster than it drains (see {@link #measure}).
      */
-    private static final int RECEIVER_DELAY_MS = 200;
+    private static final int RECEIVER_DELAY_MS = 50;
 
     /** Flood size; {@code -Dhookflow.it.flood=10000} for the full-scale run. */
     private static final int FLOOD_EVENTS = Integer.getInteger("hookflow.it.flood", 1_500);
+
+    /** Events per batch when submitting the flood (max is 500 on the API). */
+    private static final int FLOOD_BATCH = 100;
 
     private static HttpServer receiver;
     private static int receiverPort;
@@ -154,6 +148,16 @@ class FairnessIT extends AbstractIntegrationTest {
     /**
      * Floods one tenant, then submits one event as the victim and times it end to
      * end (ingest accepted -> delivery SUCCEEDED).
+     *
+     * <p>The flood goes in through the <b>batch</b> endpoint. That is not a shortcut:
+     * the queue a victim waits behind only exists while more work arrives than the
+     * worker can drain, so the flood has to be submitted faster than the worker
+     * consumes it. Ingesting one event at a time made that depend on how slow the
+     * rest of the system happened to be, and v0.4 broke it twice — first by making
+     * the relay fast (B4), then by doubling the worker's concurrency (B5). Batching
+     * the flood removes the dependence: 1 500 events land in ~1 s while the worker
+     * drains ~40–160/s, so the backlog is real regardless of how the platform is
+     * tuned.
      */
     private Measurement measure(int flooderBudget) {
         long floodTenant = newTenant("flood", flooderBudget);
@@ -161,9 +165,14 @@ class FairnessIT extends AbstractIntegrationTest {
         createEndpoint(floodTenant);
         createEndpoint(victimTenant);
 
-        for (int i = 0; i < FLOOD_EVENTS; i++) {
-            ingestService.ingest(floodTenant, "order.paid", "{\"amount\":" + i + "}",
-                    "flood-" + UUID.randomUUID());
+        for (int offset = 0; offset < FLOOD_EVENTS; offset += FLOOD_BATCH) {
+            List<EventIngestService.BatchItem> items = new ArrayList<>(FLOOD_BATCH);
+            int end = Math.min(offset + FLOOD_BATCH, FLOOD_EVENTS);
+            for (int i = offset; i < end; i++) {
+                items.add(new EventIngestService.BatchItem("order.paid", "{\"amount\":" + i + "}",
+                        "flood-" + UUID.randomUUID()));
+            }
+            ingestService.ingestBatch(floodTenant, items);
         }
         long backlogAtSubmit = outboxMapper.countUnpublished();
 

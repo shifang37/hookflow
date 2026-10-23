@@ -29,9 +29,19 @@ spring:
         # purpose: concurrency is the number of attempts in flight, prefetch is
         # how many extra messages one thread may hold unacknowledged. Together
         # they decide how much work the broker may push before it must wait.
+        #
+        # v0.4 measured this cell (docs/performance.md §18): after the relay was
+        # batched, two commits per delivery are what limits the worker, so the only
+        # cheap lever is concurrency. 8 concurrent attempts delivered 158/s, 16
+        # delivered ~280/s, and at 32 the relay became the constraint again (~390/s
+        # with the broker queue empty), so 32 buys nothing until the relay is faster.
+        # Starting at 2 and ramping to 8 wasted the first ~30 s of every run, hence
+        # 8 as the floor. Prefetch made no difference at any level measured (8 vs 32
+        # is inside the run-to-run spread): it limits how much one thread may hoard,
+        # not how much the worker can do.
         prefetch: ${MQ_PREFETCH:8}
-        concurrency: ${MQ_CONCURRENCY:2}
-        max-concurrency: ${MQ_MAX_CONCURRENCY:8}
+        concurrency: ${MQ_CONCURRENCY:8}
+        max-concurrency: ${MQ_MAX_CONCURRENCY:16}
         default-requeue-rejected: false
   data:
     redis:
