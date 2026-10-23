@@ -1,0 +1,41 @@
+﻿n	total_s	avg_ms	rows_per_call	lock_s	digest
+27256	490.82	18.008	0.0	0.00	COMMIT
+630	14.72	23.373	46.4	0.00	UPDATE `outbox` SET STATUS = ? , `published_at` = NOW (?) WHERE `id` IN (...)
+12146	6.50	0.535	1.0	0.02	UPDATE `delivery` SET STATUS = ? , `attempt_count` = `attempt_count` + ? , `lease_token` = ? , `lease_until` = DATE_ADD 
+12151	5.47	0.450	1.0	0.01	UPDATE `delivery` SET STATUS = ? , `lease_token` = ? , `lease_until` = ? , `next_attempt_at` = ? , `attempt_count` = ? ,
+3148	4.39	1.393	20.0	0.00	INSERT INTO EVENT ( `tenant_id` , `event_type` , `payload` , `idempotency_key` ) VALUES (...) /* , ... */
+12194	3.97	0.326	1.0	0.01	UPDATE `delivery_attempt` SET STATUS = ? , `status_code` = ? , `response_preview` = ? , `error_class` = ? , `duration_ms
+61345	3.59	0.058	0.0	0.00	SELECT @@SESSION . `transaction_read_only`
+12186	3.35	0.275	1.0	0.05	INSERT INTO `delivery_attempt` ( `delivery_id` , `attempt_no` , STATUS ) VALUES (...)
+57523	3.06	0.053	0.0	0.00	SET `autocommit` = ?
+3149	2.81	0.892	20.0	0.00	INSERT INTO `outbox` ( `aggregate_type` , `aggregate_id` , `attempt_no` , `payload` , `tenant_id` , `endpoint_id` , STAT
+3150	2.29	0.727	20.0	0.00	INSERT INTO `delivery` ( `tenant_id` , `event_id` , `endpoint_id` , STATUS , `attempt_count` , `max_attempts` ) VALUES (
+6300	2.17	0.344	0.0	0.01	SELECT * FROM EVENT WHERE `tenant_id` = ? AND `idempotency_key` IN (...)
+12078	1.97	0.163	0.0	0.02	SELECT * FROM EVENT WHERE `id` = ?
+12118	1.58	0.131	0.0	0.01	SELECT * FROM `delivery` WHERE `id` = ?
+82	1.55	18.888	49.5	0.00	UPDATE `outbox` SET STATUS = ? , `publishing_since` = ? WHERE STATUS = ? AND `id` IN (...)
+668	1.51	2.263	49.9	0.00	UPDATE `outbox` SET STATUS = ? , `publishing_since` = NOW (?) , `publish_attempts` = `publish_attempts` + ? WHERE `id` I
+70	1.33	18.998	1.0	0.00	UPDATE `outbox` SET STATUS = ? , `publishing_since` = ? , `published_at` = ? WHERE `aggregate_type` = ? AND `aggregate_i
+12175	1.24	0.102	0.0	0.01	SELECT * FROM `endpoint` WHERE `id` = ?
+170	0.91	5.358	0.0	0.00	SELECT `tenant_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `outbox` WHERE STATUS IN (...) GROUP BY `tenant_id`
+3148	0.78	0.249	0.0	0.00	SELECT * FROM `delivery` WHERE `tenant_id` = ? AND `event_id` IN (...)
+3867	0.67	0.172	0.0	0.01	SELECT * FROM `api_key` WHERE `key_prefix` = ?
+559	0.66	1.188	0.9	0.00	INSERT INTO `outbox` ( `aggregate_type` , `aggregate_id` , `attempt_no` , `payload` , `tenant_id` , `endpoint_id` , STAT
+3876	0.62	0.159	0.0	0.00	SELECT * FROM `endpoint` WHERE `tenant_id` = ? AND STATUS = ?
+170	0.60	3.527	0.0	0.00	SELECT COUNT ( * ) FROM `outbox` WHERE STATUS IN (...)
+3866	0.49	0.127	0.0	0.00	SELECT * FROM `tenant` WHERE `id` = ?
+673	0.40	0.593	0.0	0.00	SELECT * FROM `outbox` WHERE STATUS = ? ORDER BY `id` LIMIT ? FOR UPDATE SKIP LOCKED
+727	0.29	0.397	1.0	0.00	INSERT INTO EVENT ( `tenant_id` , `event_type` , `payload` , `idempotency_key` ) VALUES (...)
+487	0.24	0.494	1.0	0.00	INSERT INTO `delivery` ( `tenant_id` , `event_id` , `endpoint_id` , STATUS , `attempt_count` , `max_attempts` ) VALUES (
+1443	0.15	0.106	0.0	0.00	SELECT * FROM EVENT WHERE `tenant_id` = ? AND `idempotency_key` = ?
+183	0.09	0.478	0.0	0.00	SELECT `tenant_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `delivery` WHERE STATUS = ? GROUP BY `tenant_id`
+183	0.08	0.438	0.0	0.00	SELECT `endpoint_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `delivery` WHERE STATUS = ? GROUP BY `endpoint_id`
+4	0.06	14.836	0.0	0.00	SELECT * FROM `delivery` WHERE STATUS = ? AND `updated_at` < DATE_SUB ( NOW (?) , INTERVAL ? SQL_TSI_SECOND ) ORDER BY `
+487	0.05	0.106	0.0	0.00	SELECT * FROM `delivery` WHERE `event_id` = ? AND `endpoint_id` = ?
+183	0.02	0.127	0.0	0.00	SELECT `id` , `max_concurrency` FROM `endpoint` WHERE STATUS = ? AND `max_concurrency` > ?
+183	0.02	0.116	0.0	0.00	SELECT `id` , `max_in_flight` , `weight` FROM `tenant` WHERE STATUS = ?
+3	0.01	4.640	1.0	0.00	INSERT INTO `tenant` ( NAME , `rate_limit` , STATUS ) VALUES (...)
+54	0.01	0.245	0.0	0.00	SELECT * FROM `delivery` WHERE STATUS = ? AND `next_attempt_at` <= NOW (?) ORDER BY `next_attempt_at` LIMIT ?
+16	0.00	0.201	0.0	0.00	SELECT @@SESSION . `auto_increment_increment` AS `auto_increment_increment` , @@`character_set_client` AS `character_set
+3	0.00	1.048	0.0	0.00	SELECT `TABLE_SCHEMA` AS `TABLE_CAT` , ? AS `TABLE_SCHEM` , TABLE_NAME , CASE WHEN `TABLE_TYPE` = ? THEN CASE WHEN `TABL
+3	0.00	0.692	1.0	0.00	INSERT INTO `endpoint` ( `tenant_id` , URL , `secret_cipher` , `secret_key_version` , `subscribed_types` , `max_attempts

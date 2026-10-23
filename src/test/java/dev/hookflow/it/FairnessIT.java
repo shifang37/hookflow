@@ -55,8 +55,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class FairnessIT extends AbstractIntegrationTest {
 
-    /** Receiver latency: enough to build a queue, small enough to keep the suite usable. */
-    private static final int RECEIVER_DELAY_MS = 50;
+    /**
+     * Receiver latency: long enough that the consumer is <b>slower than the ingest
+     * loop</b> (8 workers / 200 ms = 40 events/s vs ~50 events/s ingested one by
+     * one), so the flood really does build a queue.
+     *
+     * <p>It was 50 ms until v0.4's B4. At 50 ms the consumer ran at ~160/s, which is
+     * faster than the ingest loop — the only reason a queue existed back then was
+     * that the relay could publish just 41 rows/s, i.e. the test was unknowingly
+     * measuring "the outbox is the bottleneck". Batching the relay
+     * (ADR-0014) made it fast enough to keep up with ingestion, so the accident went
+     * away and the unbounded victim no longer waited behind anything (158 ms).
+     * The fix is to build the queue with the receiver, which is where it is built in
+     * production too.
+     */
+    private static final int RECEIVER_DELAY_MS = 200;
 
     /** Flood size; {@code -Dhookflow.it.flood=10000} for the full-scale run. */
     private static final int FLOOD_EVENTS = Integer.getInteger("hookflow.it.flood", 1_500);

@@ -131,8 +131,11 @@ UPDATE tenant SET max_in_flight = 200, weight = 1 WHERE id = 7;
 
 生效延迟 ≤ `hookflow.fairness.refresh-interval-ms`（默认 1s）。
 
-定值方法：**目标等待时间 × 排空速率**。排空速率 ≈ `worker 并发 ÷ 接收方延迟`。
+定值方法：**目标等待时间 × 排空速率**。排空速率 ≈ `worker 并发 ÷ 每次投递成本`（接收方慢时就是 `÷ 接收方延迟`；
+接收方快时是 `÷ (claim 提交 + HTTP + settle 提交)`）。
 例：8 个 worker、接收方 100ms → 80/s；想让它最多等 500ms → `max_in_flight = 40`。
+**本机实测的排空速率是 135–190 events/s（v0.4 B4 之后，worker 是上限）**，v0.3 那个"300/s"是入口接受速率，
+不能用来算这个值，见 [performance.md §15–§16](performance.md)。
 把它设成 `0` 等于放弃隔离（回到 v0.2：一个大租户可以吃掉整个队列）。
 
 ### 队列长度上限改不了

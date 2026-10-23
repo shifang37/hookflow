@@ -124,7 +124,7 @@ jitter(x) = x/2 + rand(0, x/2)
 |---|---|---|---|
 | 事务中（写 event/delivery/outbox） | 全部回滚 | 调用方重试（幂等键保护） | 收到 5xx，重试后同一个 eventId |
 | relay 已领取、尚未 publish | outbox = PUBLISHING | `OutboxSweeper` 60s 后重置为 NEW | 延迟约 60s，不丢 |
-| relay 已 publish、未标记 | outbox = PUBLISHING，**MQ 有消息** | sweeper 重置 → 再发一次 | **可能重复**，被 attempt 护栏吸收 |
+| relay 已 publish、未标记 | outbox = PUBLISHING，**MQ 有消息** | sweeper 重置 → 再发一次 | **可能重复**，被 attempt 护栏吸收。v0.4 起发布是批量的，所以这个窗口的粒度是**一批**（默认最多 50 行），不是一行（[ADR-0014](adr/0014-batched-relay-publish.md)） |
 | worker 已 claim、未发 HTTP | delivery = DELIVERING，lease 有效 | lease 到期 → 回收 → 重新入队 | 延迟 ≤ lease TTL |
 | worker 已发 HTTP、响应前崩溃 | delivery = DELIVERING，attempt = IN_PROGRESS | lease 到期 → attempt 置 ABANDONED → 回收 | **可能重复**（对方可能已处理） |
 | worker 已写 attempt、未更新 delivery | 同上 | 同上 | 无额外影响 |
@@ -144,6 +144,7 @@ v0.1/v0.2 的缺口现在都有了明确答案。**投递语义没有变化，�
 | 端点并发上限（`endpoint.max_concurrency`） | 打到某个 URL 的并行调用有上限 | 无。排队发生在 outbox，仍是 at-least-once |
 | 入口降载（`42902` / `50301`） | 积压超水位时**拒绝新事件**，带 `Retry-After` | **有**：被拒的事件**没有被接受过**，所以 G1 仍然成立（"返回 202 就一定会投递"），但"所有事件都会被接受"不再成立 |
 | 批量提交（`POST /v1/events/batch`，v0.4） | N 条事件在一个事务里写入；部分重复按条返回 `replay`；同一批内重复的键解析到第一次出现；限流与降载**按条数计** | **无**：G1/G2/G3 对每一条仍然成立。整批被拒（400/429/503）时一条都没有被接受，所以不存在"半批成功"的语义 |
+| 批量发布（relay，v0.4 B4） | 一批消息先全部发送、再一起等 confirm；确认过的行一条 UPDATE 标记；未确认的一律放回 `NEW` | **无**（G1 不依赖 relay 的原子性）：没有 ack 的行绝不会被标成 PUBLISHED，所以最坏情况是**重复**（一批内可能多出 50 条重复），不是丢失。重复由 G4 的 attempt 栅栏与接收方按 `event_id` 去重吸收 |
 | broker 队列长度上限 + `reject-publish` | 队列满时 broker 拒绝消息，relay 把行放回 `NEW` | 无。积压回到 MySQL，不丢、不重复 |
 | worker 超预算策略 | `defer`（默认，交给恢复器）/ `requeue`（立刻退回队列） | 无 |
 

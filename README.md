@@ -27,17 +27,19 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 
 ---
 
-## 能扛多少（实测，v0.3）
+## 能扛多少（实测，v0.4）
 
-**这台机器**（i5-14600K 14C/20T、31.7GB、MySQL 8.4 in Docker、`all` profile 单 JVM、payload 2KB、开环压测）：
+这台机器（i5-14600K 14C/20T、31.7GB、MySQL 8.4 in Docker、`all` profile 单 JVM、payload 2KB、开环压测）。
+**"入口能接多少"和"平台能送多少"是两个数字，差一个数量级——所以分开写。**
 
-| 到达率 | 成功率 | p50 | p95 | p99 |
-|---|---|---|---|---|
-| 100 events/s | 100% | 29 ms | 39 ms | 48 ms |
-| **300 events/s** | **100%** | **33 ms** | 48 ms | **111 ms** |
-| 450 events/s | 66%（其余 429） | 36 ms | 636 ms | 750 ms |
+| 入口形态 | 到达率 | 接受率 | 开环 p50 / p99 | **平台持续投递** |
+|---|---:|---:|---|---:|
+| 单条 `POST /v1/events` | 300 events/s | 100% | 33 / 111 ms | — |
+| 批量 20 条 | 450 events/s | 100% | 40 / **75 ms** | B4 前 41/s → **B4 后 400–466/s** |
+| 批量 20 条 | 900 events/s | 100% | 41 / **103 ms** | B4 前 39/s → **B4 后 390–460/s** |
 
-**结论：本机稳定 300 events/s（p99 < 500ms）；瓶颈是一次事务一次 fsync 的 DB 提交，不是 CPU、不是 GC、不是连接池。**
+**结论：入口能接 900 events/s（批量，p99 103ms），但平台每秒真正送到客户的只有 400–466 events/s——而且这个上限
+是 relay 的，不是入口的。** 投递侧现在最紧的是 **worker（每次投递两次提交），实测 135–190 events/s**。
 
 三个最能说明问题的数字：
 
@@ -45,11 +47,18 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 2. **一个租户的洪水对小租户 p99 的影响：4 584ms → 190ms**，只因为给洪水租户设了并发预算（`max_in_flight`）。
 3. **过载 3 倍时，水位线决定是降级还是雪崩**：水位 10 000 → p99 2.7s、积压 10 258 行；水位 200 → p99 84ms、92% 请求 2.3ms 内被 429、积压 15 秒归零。
 
+> **v0.3 的"本机稳定 300 events/s、瓶颈是 DB 提交"这句话已经被推翻**：那 300/s 是"入口在接受"，30 秒窗口里积压
+> 还没越过水位线；B0 的重测（[performance.md §15](docs/performance.md)）给出真实持续吞吐 **41 events/s**，
+> 瓶颈是 relay 的"每行一次 confirm + 一次单行 UPDATE 提交"。B4 把它批量化后是 400–466/s，见
+> [§16](docs/performance.md) 与 [ADR-0014](docs/adr/0014-batched-relay-publish.md)。
+
+
 完整报告（含 GC 日志、JFR 证据、fsync A/B、**以及测量方法本身犯过的三个错误**）：[docs/performance.md](docs/performance.md)。容量模型与"扩容先加谁"：[docs/capacity.md](docs/capacity.md)。
 
 **v0.4 批量提交**（`POST /v1/events/batch`，20 条/请求，同一台机器、同一天、改造前后各两次对照）：同一到达率 450 events/s 下，单条路径开环 p50 / p99 = **1.10 s / 2.31 s**，批量 = **42.7 ms / 69.5 ms**；批量到 900 events/s 仍 100% 接受（p99 1.39 s）。**这是入口指标，不是投递指标**——下游排空未变，单条路径的 p99 对照也**未测出差异**（散布 64–289 ms）。数字、方法与"没证明什么"：[performance.md §14](docs/performance.md)。
+下游那一半后来在 [§15](docs/performance.md) 补测（B0），并在 [§16](docs/performance.md) 修掉（B4，relay 41 → 400–466/s）。
 
-> README 里出现的每一个数字都对应 `docs/perf/` 下的一份原始输出（v0.3 在 `2026-10-22/`，v0.4 批量在 `2026-10-23-batch/`）。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
+> README 里出现的每一个数字都对应 `docs/perf/` 下的一份原始输出（v0.3 在 `2026-10-22/`，v0.4 批量在 `2026-10-23-batch/`，下游再基线在 `2026-10-23-downstream/`，批量发布之后在 `2026-10-23-relay-batch/`）。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
 
 ---
 
@@ -295,7 +304,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 ```bash
 ./mvnw test      # 96 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 96 单元 + 36 集成 = 132 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 4 分 23 秒）
+./mvnw verify    # 105 单元 + 36 集成 = 141 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 5 分 13 秒）
 ```
 
 | 测试 | 证明的命题 |
@@ -452,6 +461,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - [ADR-0011](docs/adr/0011-distributed-tracing.md) — 为什么 trace 上下文放进 payload，而不仅是 MQ header
 - [ADR-0012](docs/adr/0012-demo-console.md) — 为什么演示控制台打进应用（静态页 + 条件 bean），而不是独立前端工程
 - [ADR-0013](docs/adr/0013-batch-ingest.md) — 为什么批量摄入是「一个事务 + 每条自己的幂等键」，而不是请求级事务或部分成功
+- [ADR-0014](docs/adr/0014-batched-relay-publish.md) — 为什么 relay 批量发布是「一批一个 confirm 窗口 + 一次批量 UPDATE」，而不是完全异步确认
 
 ---
 
@@ -509,7 +519,7 @@ src/main/resources/static/demo/
 └── style.css
 
 docs/
-├── adr/             13 条架构决策（含 0009/0010/0011/0012/0013）
+├── adr/             14 条架构决策（含 0009/0010/0011/0012/0013/0014）
 ├── failures/        真实缺陷复盘与演练记录（含 0007）
 ├── perf/            压测原始输出（报告引用的唯一来源）
 ├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么
@@ -518,7 +528,7 @@ docs/
 └── v0.3-checklist.md 本轮验收清单（哪些做了、哪些没做、为什么）
 
 scripts/
-├── bench.ps1        压测入口（GC 日志 + JFR + 指标 + 清库）
+├── bench.ps1        压测入口（GC 日志 + JFR + 指标 + 清库 + 下游采样/语句摘要）
 ├── drill.ps1        故障演练（真杀进程）
 └── demo.ps1 / demo.sh  一键演示
 ```

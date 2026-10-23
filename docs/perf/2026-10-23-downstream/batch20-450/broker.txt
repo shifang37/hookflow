@@ -1,0 +1,7 @@
+﻿{
+    "name":  "hookflow.delivery",
+    "messages_unacknowledged":  3,
+    "consumers":  8,
+    "messages_ready":  0,
+    "consumer_utilisation":  ""
+}

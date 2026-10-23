@@ -13,6 +13,9 @@
 | `600-watermark200-64threads` | 600 req/s × 30s，水位线 200（64 发送线程） | §8 |
 | `600-watermark200-4threads` | 同上但 4 发送线程；用来证明"发送线程数会改变结论" | §8 |
 | `fairness-ab` | 同一洪水场景跑两遍，唯一变量是洪水租户的 `max_in_flight`（4 与 0） | §7 |
+| `2026-10-23-batch/` | v0.4 A2 批量入口对照（单条 vs 批量 20，同一到达率） | §14 |
+| `2026-10-23-downstream/` | v0.4 B0 下游再基线（批量前后 × 下游速率、积压曲线、语句摘要） | §15 |
+| `2026-10-23-relay-batch/` | v0.4 B4 批量发布之后（同一组到达率，只改代码） | §16 |
 
 每个目录里：
 
@@ -23,6 +26,9 @@
 | `gc-summary.txt` | 该次运行的 `-Xlog:gc*` 汇总（次数、总停顿、最大停顿） |
 | `meta.txt` | 机器规格、JVM 参数、应用参数、payload、速率、git rev、Docker 版本 |
 | `metrics.txt` 或 `db.txt` | 该次运行采集的 Micrometer 指标 / 数据库状态（只有部分目录保留） |
+| `series.csv` / `downstream.txt` | **每秒级的下游曲线**：计数原始值与折算后的速率（发布/s、积压、队列深度、连接等待） |
+| `statements.txt` | MySQL 按 digest 聚合的语句耗时与次数（窗口 = 本次运行） |
+| `broker.txt` | 跑完后 `hookflow.delivery` 队列的深度、在途、消费者数 |
 | `fairness.txt` / `fairness.json` | 公平性 A/B 的汇总 |
 
 ## 没有提交进仓库的

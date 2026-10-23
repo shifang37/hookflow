@@ -104,12 +104,34 @@ public interface OutboxMapper {
             + "</script>")
     int markPublishing(@Param("ids") List<Long> ids);
 
-    @Update("UPDATE outbox SET status = 'PUBLISHED', published_at = NOW(3) WHERE id = #{id}")
-    int markPublished(@Param("id") long id);
+    /**
+     * Marks a whole confirmed batch PUBLISHED in one statement.
+     *
+     * <p>v0.4: this used to be one UPDATE per row, i.e. one commit (one fsync) per
+     * published event — measured at ~12 ms, about half of the relay's per-row budget.
+     * The bulk form costs one commit per batch. Only rows whose publish was actually
+     * acknowledged may be passed here; the caller owns that rule.
+     */
+    @Update("<script>"
+            + "UPDATE outbox SET status = 'PUBLISHED', published_at = NOW(3)"
+            + " WHERE id IN "
+            + "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>"
+            + "</script>")
+    int markPublishedBatch(@Param("ids") List<Long> ids);
 
-    /** Put a failed publish back in the queue with an incremented attempt counter. */
-    @Update("UPDATE outbox SET status = 'NEW', publishing_since = NULL WHERE id = #{id} AND status = 'PUBLISHING'")
-    int releaseBack(@Param("id") long id);
+    /**
+     * Puts a batch of failed publishes back in the queue, in one statement.
+     *
+     * <p>Same reasoning as {@link #markPublishedBatch}: a broker outage used to cost
+     * one commit per parked row per tick. The {@code status = 'PUBLISHING'} guard is
+     * what keeps this from resurrecting a row another process already handled.
+     */
+    @Update("<script>"
+            + "UPDATE outbox SET status = 'NEW', publishing_since = NULL"
+            + " WHERE status = 'PUBLISHING' AND id IN "
+            + "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>"
+            + "</script>")
+    int releaseBackBatch(@Param("ids") List<Long> ids);
 
     /**
      * Recovery for the crash window "broker confirmed, row not yet marked".

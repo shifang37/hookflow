@@ -12,6 +12,18 @@
 # POST /v1/events/batch (that many events per request), which is how the v0.4
 # batch-ingest claim is measured: same arrival rate, fewer transactions.
 #
+# -SampleSeconds > 0 adds a second, independent measurement to the same run: a
+# sampler polls Micrometer, MySQL and the broker management API every N seconds
+# and writes series.csv plus a downstream.txt rate table. That is how v0.4's B0
+# answers "where does the next bottleneck bite" - an end-of-run snapshot says how
+# much accumulated, not whether it was still accumulating. -TailSeconds keeps the
+# sampler (and the app) alive after the load stops, so the backlog curve shows
+# the drain-down phase too, not just the rise.
+#
+# -StatementDigest resets MySQL's per-digest statement counters before the app
+# starts and dumps them afterwards (statements.txt), which is how "an ingest costs
+# 20 ms" becomes "these statements cost these milliseconds".
+#
 # The `api` scenario disables the per-tenant watermark unless -TenantWatermark is
 # given, because the `all` profile sets it to 200 for the demo console and a
 # capacity run that inherits a demo value measures shedding instead of capacity.
@@ -45,7 +57,15 @@ param(
     [int]$VictimDelayMs = 0,
     [long]$TenantWatermark = 0,
     [string]$MysqlContainer = 'hookflow-mysql',
+    [string]$RabbitContainer = 'hookflow-rabbitmq',
     [string]$JvmTuning = '',
+    # Downstream sampling (v0.4 B0). 0 keeps the old behaviour: one snapshot at the end.
+    [int]$SampleSeconds = 0,
+    [int]$TailSeconds = 0,
+    # v0.4 B3: reset MySQL's statement digests before the app starts and dump the
+    # per-digest totals afterwards, so "where did the milliseconds go" is data
+    # instead of a guess. The window covers app start-up, load and tail.
+    [switch]$StatementDigest,
     [switch]$NoStart
 )
 
@@ -221,9 +241,327 @@ function Invoke-Sql([string]$query) {
     }
 }
 
+function Invoke-SqlAsRoot([string]$query) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& docker exec -e MYSQL_PWD=root $MysqlContainer mysql -uroot -N -B -e $query 2>&1)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+# Statement digests are cumulative for the server's lifetime, so a run that does not
+# reset them measures every previous run as well. Truncating needs the root account:
+# the application's own user is not allowed to touch performance_schema.
+function Reset-Statements {
+    $result = Invoke-SqlAsRoot 'TRUNCATE performance_schema.events_statements_summary_by_digest'
+    if (($result -join ' ').Trim() -ne '') {
+        Stamp "could not reset statement digests: $($result -join ' ')"
+    } else {
+        Stamp 'statement digests reset (window = this run)'
+    }
+}
+
+function Write-StatementDigest {
+    $sql = "SELECT COUNT_STAR AS n, ROUND(SUM_TIMER_WAIT/1000000000000,2) AS total_s, " +
+           "ROUND(AVG_TIMER_WAIT/1000000000,3) AS avg_ms, " +
+           "ROUND(SUM_ROWS_AFFECTED/COUNT_STAR,1) AS rows_per_call, " +
+           "ROUND(SUM_LOCK_TIME/1000000000000,2) AS lock_s, " +
+           "LEFT(DIGEST_TEXT,120) AS digest " +
+           "FROM performance_schema.events_statements_summary_by_digest " +
+           "WHERE SCHEMA_NAME='hookflow' ORDER BY SUM_TIMER_WAIT DESC LIMIT 40"
+    $lines = @("n`ttotal_s`tavg_ms`trows_per_call`tlock_s`tdigest") + (Invoke-SqlAsRoot $sql)
+    $lines | Set-Content -Path (Join-Path $runDir 'statements.txt') -Encoding UTF8
+    Write-Host ''
+    Write-Host 'top statements by total time (MySQL digest, schema hookflow):'
+    $lines | Select-Object -First 15 | ForEach-Object { Write-Host $_ }
+}
+
 function Get-Unpublished {
     $value = Invoke-Sql "SELECT COUNT(*) FROM hookflow.outbox WHERE status IN ('NEW','PUBLISHING')"
     return ($value | Select-Object -First 1)
+}
+
+function Invoke-Rabbit([string]$arguments) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& docker exec $RabbitContainer rabbitmqctl -q $arguments.Split(' ') 2>&1)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+# The management HTTP API is not usable on this machine (every /api/queues request
+# times out behind the local proxy, cold or warm), so the broker is read the same
+# way the database is: through rabbitmqctl inside the container.
+function Get-QueueStats {
+    $json = Invoke-Rabbit 'list_queues --formatter json name messages_ready messages_unacknowledged consumers consumer_utilisation'
+    $text = ($json -join "`n")
+    if (-not $text.Trim().StartsWith('[')) { return $null }
+    $queues = $text | ConvertFrom-Json
+    foreach ($queue in $queues) {
+        if ($queue.name -eq 'hookflow.delivery') { return $queue }
+    }
+    return $null
+}
+
+# A queue declared with different arguments can never be re-declared: RabbitMQ
+# answers PRECONDITION_FAILED, the app logs it every few seconds, and the *old*
+# queue - typically one without the length cap - keeps serving. A run on top of
+# that measures a topology no configuration file describes, so the bench drops the
+# queues and lets the app it starts recreate them from application.yml.
+function Reset-Broker {
+    foreach ($queue in @('hookflow.delivery', 'hookflow.delivery.dlq')) {
+        Invoke-Rabbit "delete_queue $queue" | Out-Null
+    }
+    Stamp 'broker queues deleted (the app will recreate the declared topology)'
+}
+
+# --------------------------------------------------------------- sampling ----
+# Three sources, because each one alone is ambiguous:
+#   Micrometer  what the service says it did (published / succeeded / shed)
+#   MySQL       row counts - the only place a backlog can actually be verified
+#   broker      queue depth and consumer utilisation, which is what separates
+#               "the relay cannot publish fast enough" (queue empty, worker idle)
+#               from "the worker cannot keep up" (queue growing, util ~1)
+# The sampler runs in its own process so it cannot be slowed down by the load
+# generator, and it stops on a stop file rather than Stop-Job so the last line of
+# the CSV is never a half-written one.
+$samplerStopFile = Join-Path $runDir 'sampler.stop'
+$seriesFile = Join-Path $runDir 'series.csv'
+$samplerLog = Join-Path $runDir 'sampler.log'
+
+$seriesColumns = @('t', 'elapsed_s', 'phase',
+    'accepted', 'published', 'outbox_backlog', 'outbox_new_db', 'delivery_pending_db',
+    'delivery_succeeded', 'publish_rejected', 'publish_failed', 'hikaricp_pending',
+    'lock_conflict', 'ingest_shed', 'consumer_acked', 'consumer_requeued',
+    'worker_over_capacity', 'mq_ready', 'mq_unacked', 'mq_consumers', 'mq_utilisation')
+
+function Start-DownstreamSampler {
+    if ($SampleSeconds -le 0) { return $null }
+    if (Test-Path $samplerStopFile) { Remove-Item $samplerStopFile -Force }
+    Set-Content -Path $seriesFile -Value (($seriesColumns) -join ',') -Encoding ASCII
+    Set-Content -Path $samplerLog -Value '' -Encoding ASCII
+    $arguments = @("$baseUrl/actuator/prometheus", $seriesFile, $samplerStopFile, $samplerLog,
+        ($SampleSeconds * 1000), $MysqlContainer, $RabbitContainer, $Warmup, $Duration, $TailSeconds)
+    Write-Host "sampling every $SampleSeconds s -> series.csv"
+    return Start-Job -ArgumentList $arguments -ScriptBlock {
+        param($promUrl, $outFile, $stopFile, $logFile, $intervalMs, $container, $rabbitContainer, $warmup, $duration, $tail)
+
+        $ErrorActionPreference = 'Continue'
+        $start = Get-Date
+        $endOfWarmup = [double]$warmup
+        $endOfLoad = [double]($warmup + $duration)
+
+        # Sums every series with this exact metric name (all label sets). A metric
+        # that has never been touched is absent from the scrape; it is reported as
+        # $null rather than 0 so a missing source cannot look like a real dip.
+        function Sum-Metric([string[]]$lines, [string]$name, [string[]]$mustContain = @()) {
+            $total = 0.0
+            $seen = $false
+            foreach ($line in $lines) {
+                if (-not $line.StartsWith($name)) { continue }
+                $rest = $line.Substring($name.Length)
+                if ($rest.Length -gt 0 -and $rest[0] -ne '{' -and $rest[0] -ne ' ') { continue }
+                $matched = $true
+                foreach ($needle in $mustContain) {
+                    if (-not $line.Contains($needle)) { $matched = $false; break }
+                }
+                if (-not $matched) { continue }
+                $value = ($line -split '\s+')[-1]
+                $parsed = 0.0
+                if ([double]::TryParse($value, [ref]$parsed)) { $total += $parsed; $seen = $true }
+            }
+            if (-not $seen) { return $null }
+            return $total
+        }
+
+        function Column($value) {
+            if ($null -eq $value) { return '' }
+            if ($value -is [double]) { return [string]([math]::Round($value, 3)) }
+            return [string]$value
+        }
+
+        $sample_error = ''
+        while (-not (Test-Path $stopFile)) {
+            $now = Get-Date
+            $elapsed = [math]::Round(($now - $start).TotalSeconds, 2)
+            $phase = if ($elapsed -lt $endOfWarmup) { 'WARMUP' }
+                     elseif ($elapsed -le $endOfLoad) { 'LOAD' }
+                     else { 'TAIL' }
+
+            $accepted = ''; $published = ''; $backlog = ''; $newDb = ''; $pendingDb = ''
+            $succeeded = ''; $rejected = ''; $failed = ''; $hikariPending = ''
+            $lockConflict = ''; $shed = ''; $acked = ''; $requeued = ''; $overCapacity = ''
+            $mqReady = ''; $mqUnacked = ''; $mqConsumers = ''; $mqUtilisation = ''
+
+            try {
+                $prom = (Invoke-WebRequest -Uri $promUrl -TimeoutSec 15 -UseBasicParsing).Content
+                $lines = $prom -split "`n"
+                # /v1/events and /v1/events/batch both start with uri="/v1/events, and
+                # 200 is a batch replayed-as-duplicate while 202 is new work.
+                $accepted202 = Sum-Metric $lines 'http_server_requests_seconds_count' @('uri="/v1/events', 'status="202"')
+                $accepted200 = Sum-Metric $lines 'http_server_requests_seconds_count' @('uri="/v1/events', 'status="200"')
+                if ($null -ne $accepted202 -and $null -ne $accepted200) { $accepted = $accepted202 + $accepted200 }
+                elseif ($null -ne $accepted202) { $accepted = $accepted202 }
+                elseif ($null -ne $accepted200) { $accepted = $accepted200 }
+                $published = Sum-Metric $lines 'hookflow_outbox_published_total'
+                $succeeded = Sum-Metric $lines 'hookflow_delivery_succeeded_total'
+                $rejected = Sum-Metric $lines 'hookflow_outbox_publish_rejected_total'
+                $failed = Sum-Metric $lines 'hookflow_outbox_publish_failed_total'
+                $hikariPending = Sum-Metric $lines 'hikaricp_connections_pending'
+                $lockConflict = Sum-Metric $lines 'hookflow_db_lock_conflict_total'
+                $shed = Sum-Metric $lines 'hookflow_ingest_shed_total'
+                $acked = Sum-Metric $lines 'hookflow_consumer_acked_total'
+                $requeued = Sum-Metric $lines 'hookflow_consumer_requeued_total'
+                $overCapacity = Sum-Metric $lines 'hookflow_worker_over_capacity_total'
+            } catch {
+                Add-Content -Path $logFile -Value ("[{0}] prometheus: {1}" -f $now.ToString('HH:mm:ss'), $_.Exception.Message)
+            }
+
+            try {
+                # Schema-qualified: the CLI has no default database here, and an
+                # unqualified query fails with "No database selected" - which would
+                # silently turn the backlog column into a blank.
+                $sql = "SELECT (SELECT COUNT(*) FROM hookflow.outbox WHERE status='NEW')," +
+                       "(SELECT COUNT(*) FROM hookflow.delivery WHERE status='PENDING')," +
+                       "(SELECT COUNT(*) FROM hookflow.outbox WHERE status IN ('NEW','PUBLISHING'))"
+                $raw = & docker exec -e MYSQL_PWD=hookflow $container mysql -uhookflow -N -B -e $sql 2>&1
+                $parts = ([string]($raw | Select-Object -First 1)) -split "`t"
+                if ($parts.Count -ge 3) {
+                    $newDb = [double]$parts[0]
+                    $pendingDb = [double]$parts[1]
+                    $backlog = [double]$parts[2]
+                } else {
+                    Add-Content -Path $logFile -Value ("[{0}] mysql: {1}" -f $now.ToString('HH:mm:ss'), ([string]($raw | Select-Object -First 1)))
+                }
+            } catch {
+                Add-Content -Path $logFile -Value ("[{0}] mysql: {1}" -f $now.ToString('HH:mm:ss'), $_.Exception.Message)
+            }
+
+            try {
+                $raw = & docker exec $rabbitContainer rabbitmqctl -q list_queues --formatter json `
+                    name messages_ready messages_unacknowledged consumers consumer_utilisation 2>&1
+                $text = ([string]($raw -join "`n")).Trim()
+                if ($text.StartsWith('[')) {
+                    foreach ($queue in ($text | ConvertFrom-Json)) {
+                        if ($queue.name -ne 'hookflow.delivery') { continue }
+                        $mqReady = [double]$queue.messages_ready
+                        $mqUnacked = [double]$queue.messages_unacknowledged
+                        $mqConsumers = [double]$queue.consumers
+                        if ([string]$queue.consumer_utilisation -ne '') { $mqUtilisation = [double]$queue.consumer_utilisation }
+                    }
+                }
+            } catch {
+                Add-Content -Path $logFile -Value ("[{0}] broker: {1}" -f $now.ToString('HH:mm:ss'), $_.Exception.Message)
+            }
+
+            $row = @($now.ToString('HH:mm:ss'), (Column $elapsed), $phase,
+                (Column $accepted), (Column $published), (Column $backlog), (Column $newDb),
+                (Column $pendingDb), (Column $succeeded), (Column $rejected), (Column $failed),
+                (Column $hikariPending), (Column $lockConflict), (Column $shed),
+                (Column $acked), (Column $requeued), (Column $overCapacity),
+                (Column $mqReady), (Column $mqUnacked), (Column $mqConsumers), (Column $mqUtilisation))
+            Add-Content -Path $outFile -Value ($row -join ',')
+            Start-Sleep -Milliseconds $intervalMs
+        }
+    }
+}
+
+function Stop-DownstreamSampler($job) {
+    if (-not $job) { return }
+    New-Item -ItemType File -Force -Path $samplerStopFile | Out-Null
+    Wait-Job $job -Timeout 60 | Out-Null
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    Stamp "sampler stopped ($samplerLog)"
+}
+
+# Turns series.csv into the table the report actually quotes: per-interval rates
+# instead of cumulative counters. Anything that is not a number (a failed poll)
+# makes that pair of rows unusable rather than being counted as 0 - a hole in the
+# data must not look like a dip in throughput.
+function Write-DownstreamReport {
+    if ($SampleSeconds -le 0 -or -not (Test-Path $seriesFile)) { return }
+    $rows = @(Import-Csv -Path $seriesFile)
+    if ($rows.Count -lt 2) { return }
+
+    function ToNumber($value) {
+        $parsed = 0.0
+        if ([double]::TryParse([string]$value, [ref]$parsed)) { return $parsed }
+        return $null
+    }
+
+    $lines = @()
+    $lines += ("# {0} events/s, batch {1}, warmup {2}s, load {3}s, tail {4}s" -f $Rate, $BatchSize, $Warmup, $Duration, $TailSeconds)
+    $lines += ''
+
+    function Format-Rate($value) {
+        if ($null -eq $value) { return '-' }
+        return ('{0:0.0}' -f [double]$value)
+    }
+    function Format-Count($value) {
+        if ($null -eq $value) { return '-' }
+        return ('{0:0}' -f [double]$value)
+    }
+    function Format-Row([string[]]$cells) {
+        $widths = @(8, 7, 9, 10, 10, 10, 9, 7, 7, 6, 8, 8)
+        $parts = @()
+        for ($c = 0; $c -lt $cells.Count; $c++) { $parts += $cells[$c].PadLeft($widths[$c]) }
+        return ($parts -join ' ')
+    }
+
+    $lines += (Format-Row -cells @('elapsed', 'phase', 'accept/s', 'publish/s', 'succeed/s',
+            'backlog', 'delivPend', 'mqReady', 'mqUnack', 'hikPend', 'reject/s', 'lock/s'))
+
+    $steady = New-Object System.Collections.ArrayList
+    for ($i = 1; $i -lt $rows.Count; $i++) {
+        $previous = $rows[$i - 1]
+        $current = $rows[$i]
+        $elapsed = ToNumber $current.elapsed_s
+        $previousElapsed = ToNumber $previous.elapsed_s
+        if ($null -eq $elapsed -or $null -eq $previousElapsed) { continue }
+        $dt = $elapsed - $previousElapsed
+        if ($dt -le 0) { continue }
+
+        $rate = @{}
+        foreach ($name in @('accepted', 'published', 'delivery_succeeded', 'publish_rejected', 'lock_conflict')) {
+            $now = ToNumber $current.$name
+            $before = ToNumber $previous.$name
+            if ($null -ne $now -and $null -ne $before) {
+                $rate[$name] = ($now - $before) / $dt
+            } else {
+                $rate[$name] = $null
+            }
+        }
+
+        $lines += (Format-Row -cells @(
+            ('{0:0.0}' -f $elapsed),
+            $current.phase,
+            (Format-Rate $rate.accepted),
+            (Format-Rate $rate.published),
+            (Format-Rate $rate.delivery_succeeded),
+            (Format-Count (ToNumber $current.outbox_backlog)),
+            (Format-Count (ToNumber $current.delivery_pending_db)),
+            (Format-Count (ToNumber $current.mq_ready)),
+            (Format-Count (ToNumber $current.mq_unacked)),
+            (Format-Rate (ToNumber $current.hikaricp_pending)),
+            (Format-Rate $rate.publish_rejected),
+            (Format-Rate $rate.lock_conflict)
+        ))
+        if ($current.phase -eq 'LOAD' -and $null -ne $rate.published) { $steady.Add($rate.published) | Out-Null }
+    }
+
+    if ($steady.Count -gt 0) {
+        $average = ($steady | Measure-Object -Average).Average
+        $lines += ''
+        $lines += ("# steady-window publish rate: mean {0:0.0} events/s over {1} intervals (min {2:0.0}, max {3:0.0})" -f
+            $average, $steady.Count, ($steady | Measure-Object -Minimum).Minimum, ($steady | Measure-Object -Maximum).Maximum)
+    }
+    $lines | Set-Content -Path (Join-Path $runDir 'downstream.txt') -Encoding ASCII
+    Write-Host ''
+    $lines | ForEach-Object { Write-Host $_ }
 }
 
 # A bench against a database that still holds the previous run's backlog measures
@@ -258,7 +596,8 @@ function New-Tenant([string]$label, [int]$maxInFlight) {
 # ------------------------------------------------------------------ setup ----
 try {
     if (-not $NoStart) {
-        if (-not $KeepData) { Reset-Database }
+        if (-not $KeepData) { Reset-Database; Reset-Broker }
+        if ($StatementDigest) { Reset-Statements }
         Stamp 'starting receiver and application'
         Start-Background 'receiver' ('"' + $java + '" ' + $marker + ' -cp "' + $classes +
             '" dev.hookflow.tools.MockReceiver ' +
@@ -279,12 +618,19 @@ try {
                 -body @{ url = "http://127.0.0.1:$receiverPort/hook$receiverQuery"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
             Stamp "tenant $($tenant.tenantId) provisioned (rate limit disabled: measuring capacity, not quota)"
 
+            $sampler = Start-DownstreamSampler
             $loadgen = Join-Path $runDir 'loadgen.txt'
             & $java -cp $classes dev.hookflow.tools.LoadGen `
                 --url $ingestUrl --api-key $tenant.apiKey `
                 --rate $Rate --duration $Duration --warmup $Warmup --threads $Threads `
                 --payload-bytes $PayloadBytes --batch-size $BatchSize --tag $Scenario `
                 --timeline (Join-Path $runDir 'timeline.csv') 2>&1 | Tee-Object -FilePath $loadgen
+            if ($TailSeconds -gt 0) {
+                Stamp "load finished; watching $TailSeconds s of drain-down (sampler keeps running)"
+                Start-Sleep -Seconds $TailSeconds
+            }
+            Stop-DownstreamSampler $sampler
+            Write-DownstreamReport
         }
         'overload' {
             $tenant = New-Tenant 'overload' 0
@@ -292,6 +638,7 @@ try {
                 -body @{ url = "http://127.0.0.1:$receiverPort/hook$receiverQuery"; subscribedTypes = 'load.gen'; maxAttempts = 3 } | Out-Null
             Stamp "tenant $($tenant.tenantId) provisioned; arrival rate is $Rate req/s"
 
+            $sampler = Start-DownstreamSampler
             $loadgen = Join-Path $runDir 'loadgen.txt'
             & $java -cp $classes dev.hookflow.tools.LoadGen `
                 --url $ingestUrl --api-key $tenant.apiKey `
@@ -301,6 +648,8 @@ try {
             Stamp "outbox backlog right after the run: $(Get-Unpublished)"
             Start-Sleep -Seconds 15
             Stamp "outbox backlog 15s later (did it die or did it drain?): $(Get-Unpublished)"
+            Stop-DownstreamSampler $sampler
+            Write-DownstreamReport
         }
         'fairness' {
             $results = @()
@@ -430,6 +779,13 @@ try {
         'SELECT COUNT(*) AS deliveries, ROUND(AVG(TIMESTAMPDIFF(MICROSECOND, created_at, updated_at))/1000,1) AS avg_ms FROM hookflow.delivery WHERE status = ''SUCCEEDED'';'
     ) -join ' '
     Invoke-Sql $db | Set-Content -Path (Join-Path $runDir 'db.txt') -Encoding UTF8
+
+    if ($StatementDigest) { Write-StatementDigest }
+
+    $queueStats = Get-QueueStats
+    if ($null -ne $queueStats) {
+        $queueStats | ConvertTo-Json | Set-Content -Path (Join-Path $runDir 'broker.txt') -Encoding UTF8
+    }
 
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
     $os = Get-CimInstance Win32_OperatingSystem

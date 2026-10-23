@@ -197,36 +197,70 @@ public class OutboxRelay {
         return List.copyOf(ids);
     }
 
-    /** @return false when the broker looks unhealthy, so the loop stops instead of spinning */
-    private boolean publishBatch(List<OutboxMessage> batch) {
+    /**
+     * Publishes one claimed batch.
+     *
+     * <p>v0.4/B4: the batch is published <em>together</em> and marked PUBLISHED in one
+     * statement, instead of one round trip and one commit per row. Measured effect in
+     * docs/performance.md §16: the relay used to cap the platform at ~40 events/s
+     * because each row cost a publisher confirm plus an autocommitted UPDATE (~24 ms
+     * on this machine).
+     *
+     * <p>Failure handling is unchanged in kind: a rejected or unconfirmed row goes
+     * back to NEW (so the sweeper or the next tick re-publishes it), the caller stops
+     * the tick, and nothing is ever marked PUBLISHED without an ack.
+     *
+     * <p>Package-private so {@code OutboxRelayPublishBatchTest} can drive exactly this
+     * unit without going through the scheduler.
+     *
+     * @return false when the broker looks unhealthy, so the loop stops instead of spinning
+     */
+    boolean publishBatch(List<OutboxMessage> batch) {
+        List<DeliveryMessage> messages = new ArrayList<>(batch.size());
+        List<Long> ids = new ArrayList<>(batch.size());
         for (OutboxMessage row : batch) {
-            DeliveryMessage message;
             try {
-                message = objectMapper.readValue(row.payload(), DeliveryMessage.class);
+                messages.add(objectMapper.readValue(row.payload(), DeliveryMessage.class));
+                ids.add(row.id());
             } catch (RuntimeException e) {
                 log.error("Outbox row {} has an unreadable payload; leaving it for inspection", row.id(), e);
                 meterRegistry.counter("hookflow.outbox.corrupt").increment();
-                continue;
-            }
-            try {
-                publisher.publish(message);
-                outboxMapper.markPublished(row.id());
-                meterRegistry.counter("hookflow.outbox.published").increment();
-            } catch (DeliveryPublisher.PublishFailedException e) {
-                outboxMapper.releaseBack(row.id());
-                if (e.nacked()) {
-                    // Queue length cap hit. Expected under overload: the backlog
-                    // belongs in MySQL, and the row is already back there.
-                    meterRegistry.counter("hookflow.outbox.publish_rejected").increment();
-                    log.warn("Broker refused outbox row {} (queue at its length cap); "
-                            + "row is back to NEW and the backlog stays in MySQL", row.id());
-                } else {
-                    meterRegistry.counter("hookflow.outbox.publish_failed").increment();
-                    log.warn("Publish failed for outbox row {}: {}", row.id(), e.getMessage());
-                }
-                return false;
             }
         }
-        return true;
+        if (messages.isEmpty()) {
+            return true;
+        }
+
+        List<DeliveryPublisher.PublishOutcome> outcomes = publisher.publishAll(messages);
+        List<Long> published = new ArrayList<>(messages.size());
+        List<Long> rejected = new ArrayList<>();
+        List<Long> failed = new ArrayList<>();
+        for (int index = 0; index < outcomes.size(); index++) {
+            long id = ids.get(index);
+            switch (outcomes.get(index)) {
+                case ACKED -> published.add(id);
+                case NACKED -> rejected.add(id);
+                case FAILED -> failed.add(id);
+            }
+        }
+
+        if (!published.isEmpty()) {
+            outboxMapper.markPublishedBatch(published);
+            meterRegistry.counter("hookflow.outbox.published").increment(published.size());
+        }
+        if (!rejected.isEmpty()) {
+            // Queue length cap hit. Expected under overload: the backlog belongs in
+            // MySQL, and these rows are already back there.
+            outboxMapper.releaseBackBatch(rejected);
+            meterRegistry.counter("hookflow.outbox.publish_rejected").increment(rejected.size());
+            log.warn("Broker refused {} outbox row(s) (queue at its length cap); "
+                    + "they are back to NEW and the backlog stays in MySQL", rejected.size());
+        }
+        if (!failed.isEmpty()) {
+            outboxMapper.releaseBackBatch(failed);
+            meterRegistry.counter("hookflow.outbox.publish_failed").increment(failed.size());
+            log.warn("{} outbox row(s) could not be confirmed by the broker; they are back to NEW", failed.size());
+        }
+        return rejected.isEmpty() && failed.isEmpty();
     }
 }
