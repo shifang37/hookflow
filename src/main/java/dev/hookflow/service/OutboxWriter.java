@@ -9,6 +9,11 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * Appends "publish this delivery attempt" rows.
  *
@@ -55,5 +60,41 @@ public class OutboxWriter {
             return outboxMapper.rearmStalePublished(OutboxMessage.AGGREGATE_DELIVERY, deliveryId,
                     attemptNo, properties.relay().stalePublishingSeconds()) == 1;
         }
+    }
+
+    /** One delivery of a freshly ingested batch: attempt 1, no row exists yet. */
+    public record FreshDelivery(long eventId, long endpointId, long deliveryId) {
+    }
+
+    /**
+     * Appends the first attempt of many new deliveries in one statement.
+     *
+     * <p>Batch ingest creates event, delivery and outbox rows in a single
+     * transaction, so every row here is new by construction and the
+     * "re-arm an existing row" logic of {@link #append} cannot apply. A duplicate key
+     * would mean the transaction is inconsistent, and letting it roll the batch back
+     * is the correct response.
+     *
+     * <p>All rows share the request's trace context, so a whole batch shows up as
+     * children of the one API call that submitted it.
+     */
+    public void appendBatch(long tenantId, List<FreshDelivery> deliveries) {
+        if (deliveries.isEmpty()) {
+            return;
+        }
+        String traceparent = traceContext.currentTraceparent();
+        List<Map<String, Object>> rows = new ArrayList<>(deliveries.size());
+        for (FreshDelivery delivery : deliveries) {
+            DeliveryMessage message = new DeliveryMessage(delivery.deliveryId(), 1, tenantId,
+                    delivery.eventId(), delivery.endpointId(), traceparent);
+            Map<String, Object> row = new LinkedHashMap<>(6);
+            row.put("deliveryId", delivery.deliveryId());
+            row.put("attemptNo", 1);
+            row.put("payload", objectMapper.writeValueAsString(message));
+            row.put("tenantId", tenantId);
+            row.put("endpointId", delivery.endpointId());
+            rows.add(row);
+        }
+        outboxMapper.insertBatch(rows);
     }
 }

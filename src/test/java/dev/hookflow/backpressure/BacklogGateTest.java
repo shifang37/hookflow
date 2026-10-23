@@ -90,6 +90,36 @@ class BacklogGateTest {
         verify(outboxMapper, times(1)).countUnpublished();
     }
 
+    @Test
+    @DisplayName("a batch is judged against the backlog it would create")
+    void batchIsJudgedAgainstTheBacklogItWouldCreate() {
+        givenBacklog(990, 0);
+        BacklogGate gate = gate(1_000, 10_000);
+
+        assertThatCode(() -> gate.check(TENANT, 5))
+                .as("995 rows would still be under the 1 000 watermark")
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> gate.check(TENANT, 20))
+                .as("990 + 20 would cross it: a batch must not jump the watermark")
+                .isInstanceOfSatisfying(ApiException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.OVER_CAPACITY));
+    }
+
+    @Test
+    @DisplayName("the tenant watermark is projected the same way")
+    void batchCountsAgainstTheTenantWatermark() {
+        givenBacklog(0, 95);
+        BacklogGate gate = gate(1_000_000, 100);
+
+        assertThatCode(() -> gate.check(TENANT, 4))
+                .as("95 + 4 is still under the 100 watermark")
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> gate.check(TENANT, 5))
+                .as("95 + 5 reaches the watermark")
+                .isInstanceOfSatisfying(ApiException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.TENANT_BACKLOG_EXCEEDED));
+    }
+
     private void givenBacklog(long global, long tenant) {
         when(outboxMapper.countUnpublished()).thenReturn(global);
         when(outboxMapper.countUnpublishedByTenants()).thenReturn(List.of(new InFlight(TENANT, tenant)));
@@ -103,6 +133,7 @@ class BacklogGateTest {
                 new HookFlowProperties.Fairness(true, 200),
                 new HookFlowProperties.Backpressure(outboxWatermark, tenantWatermark, 7, 60_000),
                 new HookFlowProperties.Worker("defer"),
+                null,
                 null);
         return new BacklogGate(outboxMapper, properties, meterRegistry);
     }

@@ -44,6 +44,21 @@ public final class Dtos {
     public record EventResponse(long eventId, int deliveryCount, boolean idempotentReplay) {
     }
 
+    /**
+     * Batch submit body. The idempotency key is per item, not a request header: a
+     * batch is a set of independent events, and each one needs its own replay
+     * identity (documented in docs/api.md).
+     */
+    public record CreateEventBatchRequest(List<CreateEventBatchItem> events) {
+    }
+
+    public record CreateEventBatchItem(String eventType, Object payload, String idempotencyKey) {
+    }
+
+    /** One line of the batch response; {@code index} is the position in the request. */
+    public record BatchEventResponse(int index, long eventId, int deliveryCount, boolean replay) {
+    }
+
     public record DeliveryResponse(
             long id,
             long eventId,

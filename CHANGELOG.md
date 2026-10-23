@@ -24,13 +24,31 @@
 - `DemoConsoleIT`（5 个用例）：租户供给、模拟流量产生真实投递且接收方验签、5xx→重试→死信→重放恢复、
   预算按钮真的改库、状态载荷字段完整
 
+### 新增 — v0.4 生产就绪债（A1 + A2 + A4）
+
+- **`delivery_attempt` 保留策略（A1）**：`V3` 加 `idx_attempt_started`，`worker/DeliveryAttemptRetention` 按批清理
+  `status <> 'IN_PROGRESS' AND started_at < NOW(3) - INTERVAL n DAY`；配置 `hookflow.retention.attempt-days`
+  （默认 7，`0` 关闭）与 `hookflow.retention.interval-ms`；指标 `hookflow.attempt.pruned`。
+  **`IN_PROGRESS` 的行永不删除**——`settle` 的 UPDATE 带这个条件，删掉会让一次在途尝试的结果静默消失
+- **批量提交 `POST /v1/events/batch`（A2）**：最多 500 条，**一个事务**、固定 5 条 SQL 写 event/delivery/outbox；
+  部分重复按条返回 `replay:true` + 原 `eventId`，同批内重复的键解析到第一次出现；限流与降载**按事件数计**；
+  整批未提交返回 503。吞吐提升来自减少事务与往返次数，不是并发。同机对照：同一到达率 450 events/s 下，
+  单条路径开环 p50 1.10s、批量 42.7ms（[performance.md §14](docs/performance.md)）
+- **统一批量操作重试（A4）**：`common/RetryOnLockConflict`（3 次 + 递增退避，只重试
+  `PessimisticLockingFailureException`），`EndpointService.pause` 与 `DemoController.reset` 共用同一实现；
+  新指标 `hookflow.db.lock_conflict{operation}`
+- 新测试：`BatchIngestIT`、`AttemptRetentionIT`、`RetryOnLockConflictTest`、`DemoResetRetryTest`、
+  `DeliveryAttemptRetentionTest`、`TenantRateLimiterTest`；`EndpointPauseRetryTest` 改为验证公共组件
+- `scripts/bench.ps1` / `tools/LoadGen` 支持 `-BatchSize`（`--batch-size`），`--rate` 始终是 events/s，
+  用于单条 vs 批量的同机对照
+
 ### 变更
 
 - `all`（本地演示）profile 增加演示用的取值：租户水位线 200、读超时 3s、退避基数 0.8s。
   **这些不是生产建议值**，生产默认值未变
 - 演示截图：[demo-console.png](docs/demo-console.png)、[demo-console-retries.png](docs/demo-console-retries.png)
   （headless Chrome 真实渲染）
-- 测试 96 → **101**（73 单元 + 28 集成）
+- 测试 101 → **132**（96 单元 + 36 集成）
 
 ## [0.3.0] — 2026-10-22
 

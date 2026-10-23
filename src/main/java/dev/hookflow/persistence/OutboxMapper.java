@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.Map;
 
 @Mapper
 public interface OutboxMapper {
@@ -29,6 +30,30 @@ public interface OutboxMapper {
                @Param("payload") String payload,
                @Param("tenantId") long tenantId,
                @Param("endpointId") long endpointId);
+
+    /**
+     * One statement for the whole batch's "publish this attempt" rows.
+     *
+     * <p>Only used for brand-new deliveries, where a duplicate key is impossible: the
+     * row is keyed by {@code (aggregate_type, delivery_id, attempt_no)} and both the
+     * delivery and the attempt are created in this same transaction. Re-arming an
+     * existing row is the job of {@code OutboxWriter.append}, not of this statement.
+     *
+     * <p>Rows are maps: {@code deliveryId}, {@code attemptNo}, {@code payload},
+     * {@code tenantId}, {@code endpointId}.
+     */
+    @Insert("""
+            <script>
+            INSERT INTO outbox (aggregate_type, aggregate_id, attempt_no, payload,
+                                tenant_id, endpoint_id, status)
+            VALUES
+            <foreach collection="rows" item="row" separator=",">
+                ('DELIVERY', #{row.deliveryId}, #{row.attemptNo}, #{row.payload},
+                 #{row.tenantId}, #{row.endpointId}, 'NEW')
+            </foreach>
+            </script>
+            """)
+    int insertBatch(@Param("rows") List<Map<String, Object>> rows);
 
     /**
      * Locks the next batch for exactly one relay instance, skipping the tenants

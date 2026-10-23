@@ -31,12 +31,18 @@ public class TenantRateLimiter {
     private static final Logger log = LoggerFactory.getLogger(TenantRateLimiter.class);
 
     /**
-     * INCR then set the TTL only on the first increment: one round trip, no
-     * read-modify-write race, and the window cannot extend itself accidentally.
+     * INCRBY then set the TTL only on the first increment of the window: one round
+     * trip, no read-modify-write race, and the window cannot extend itself
+     * accidentally.
+     *
+     * <p>The counter counts <b>events</b>, not requests: a batch of 500 increments
+     * the same counter by 500. Counting requests instead would let one oversized
+     * batch consume 1/500th of the quota that the same events cost when submitted
+     * one by one — i.e. the batch endpoint would be a way around the limiter.
      */
     private static final String LUA = """
-            local current = redis.call('INCR', KEYS[1])
-            if current == 1 then
+            local current = redis.call('INCRBY', KEYS[1], ARGV[3])
+            if tonumber(current) == tonumber(ARGV[3]) then
               redis.call('PEXPIRE', KEYS[1], ARGV[2])
             end
             return current
@@ -56,18 +62,28 @@ public class TenantRateLimiter {
         }
     }
 
+    /** One event. */
+    public void acquire(long tenantId, int limitPerSecond) {
+        acquire(tenantId, limitPerSecond, 1);
+    }
+
     /**
+     * @param permits how many events this request represents; a batch asks for all of
+     *                them at once, so it is refused if the whole batch would exceed
+     *                the window instead of silently accepting part of it
      * @throws ApiException {@link ErrorCode#RATE_LIMITED} when the window is exhausted,
      *                      or {@link ErrorCode#DEPENDENCY_UNAVAILABLE} in fail-closed mode
      */
-    public void acquire(long tenantId, int limitPerSecond) {
+    public void acquire(long tenantId, int limitPerSecond, int permits) {
         if (!properties.rateLimit().enabled() || limitPerSecond <= 0) {
             return;
         }
+        int events = Math.max(1, permits);
         String key = "hookflow:rl:tenant:" + tenantId;
         try {
             Long current = redis.execute(SCRIPT, List.of(key),
-                    Integer.toString(limitPerSecond), Long.toString(WINDOW_MS));
+                    Integer.toString(limitPerSecond), Long.toString(WINDOW_MS),
+                    Integer.toString(events));
             if (current != null && current > limitPerSecond) {
                 throw new ApiException(ErrorCode.RATE_LIMITED,
                         "Rate limit of " + limitPerSecond + " events/s exceeded for this tenant");

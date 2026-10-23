@@ -7,7 +7,9 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -33,6 +35,63 @@ public interface DeliveryMapper {
                @Param("eventId") long eventId,
                @Param("endpointId") long endpointId,
                @Param("maxAttempts") int maxAttempts);
+
+    /**
+     * One statement for the whole fan-out of a batch.
+     *
+     * <p>Rows are maps ({@code eventId}, {@code endpointId}, {@code maxAttempts}) so
+     * MyBatis can read nested properties without a mutable DTO; the generated ids are
+     * read back with {@link #listByEventIds} inside the same transaction.
+     */
+    @Insert("""
+            <script>
+            INSERT INTO delivery (tenant_id, event_id, endpoint_id, status, attempt_count, max_attempts)
+            VALUES
+            <foreach collection="rows" item="row" separator=",">
+                (#{tenantId}, #{row.eventId}, #{row.endpointId}, 'PENDING', 0, #{row.maxAttempts})
+            </foreach>
+            </script>
+            """)
+    int insertBatch(@Param("tenantId") long tenantId, @Param("rows") List<Map<String, Object>> rows);
+
+    /**
+     * All deliveries of a set of events, in one round trip. Used by batch ingest to
+     * learn the ids it needs for the outbox payload without one SELECT per row.
+     */
+    @Select("""
+            <script>
+            SELECT * FROM delivery
+             WHERE tenant_id = #{tenantId}
+               AND event_id IN
+               <foreach collection="eventIds" item="eventId" open="(" separator="," close=")">#{eventId}</foreach>
+            </script>
+            """)
+    List<Delivery> listByEventIds(@Param("tenantId") long tenantId,
+                                  @Param("eventIds") Collection<Long> eventIds);
+
+    /** One aggregated row per event; used for the {@code deliveryCount} of a batch. */
+    record EventCount(Long id, long total) {
+    }
+
+    /**
+     * How many deliveries each event has, in one round trip.
+     *
+     * <p>Batch ingest reports a {@code deliveryCount} for every replayed item; doing
+     * that with one {@code COUNT(*)} per item would reintroduce exactly the N round
+     * trips the batch is meant to remove.
+     */
+    @Select("""
+            <script>
+            SELECT event_id AS id, COUNT(*) AS total
+              FROM delivery
+             WHERE tenant_id = #{tenantId}
+               AND event_id IN
+               <foreach collection="eventIds" item="eventId" open="(" separator="," close=")">#{eventId}</foreach>
+             GROUP BY event_id
+            </script>
+            """)
+    List<EventCount> countByEventIds(@Param("tenantId") long tenantId,
+                                     @Param("eventIds") Collection<Long> eventIds);
 
     @Select("SELECT * FROM delivery WHERE id = #{id} AND tenant_id = #{tenantId}")
     Optional<Delivery> findByIdAndTenant(@Param("id") long id, @Param("tenantId") long tenantId);

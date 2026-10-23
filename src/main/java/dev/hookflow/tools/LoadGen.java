@@ -77,10 +77,18 @@ public final class LoadGen {
         int warmupSeconds = Integer.parseInt(options.getOrDefault("warmup", "5"));
         int threads = Integer.parseInt(options.getOrDefault("threads", "4"));
         int payloadBytes = Integer.parseInt(options.getOrDefault("payload-bytes", "2048"));
+        int batchSize = Math.max(1, Integer.parseInt(options.getOrDefault("batch-size", "1")));
         String timelinePath = options.get("timeline");
         String tag = options.getOrDefault("tag", "run");
 
-        long totalRequests = (long) rate * (durationSeconds + warmupSeconds);
+        // --rate is always events per second, in both modes: that is the number the
+        // platform is sized in, and it keeps the two runs of an A/B comparable. A
+        // batch request therefore represents batchSize events and is due every
+        // batchSize/rate seconds.
+        long totalEvents = (long) rate * (durationSeconds + warmupSeconds);
+        long totalRequests = batchSize == 1
+                ? totalEvents
+                : Math.max(1, totalEvents / batchSize);
         long warmupNanos = warmupSeconds * 1_000_000_000L;
         long runId = System.nanoTime();
 
@@ -89,7 +97,6 @@ public final class LoadGen {
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
 
-        byte[] payload = payload(payloadBytes);
         Samples openLoop = new Samples(totalRequests);
         Samples closedLoop = new Samples(totalRequests);
         AtomicInteger successes = new AtomicInteger();
@@ -112,21 +119,27 @@ public final class LoadGen {
                         if (index >= totalRequests) {
                             return;
                         }
-                        long dueNanos = warmupStart + (index * 1_000_000_000L) / rate;
+                        long dueNanos = warmupStart + (index * batchSize * 1_000_000_000L) / rate;
                         parkUntil(dueNanos);
 
                         int current = inFlight.incrementAndGet();
                         peakInFlight.accumulateAndGet(current, Math::max);
                         long sendStart = System.nanoTime();
-                        String key = "loadgen-" + runId + "-" + index;
-                        HttpRequest request = HttpRequest.newBuilder()
+                        byte[] payload = batchSize == 1
+                                ? eventPayload(payloadBytes)
+                                : batchPayload(batchSize, payloadBytes, runId, index);
+                        HttpRequest.Builder builder = HttpRequest.newBuilder()
                                 .uri(URI.create(url))
                                 .header("Authorization", "Bearer " + apiKey)
                                 .header("Content-Type", "application/json")
-                                .header("Idempotency-Key", key)
                                 .timeout(Duration.ofSeconds(60))
-                                .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
-                                .build();
+                                .POST(HttpRequest.BodyPublishers.ofByteArray(payload));
+                        if (batchSize == 1) {
+                            // The single-event endpoint takes the key in a header; batch
+                            // items carry their own key inside the body.
+                            builder.header("Idempotency-Key", "loadgen-" + runId + "-" + index);
+                        }
+                        HttpRequest request = builder.build();
                         try {
                             HttpResponse<Void> response = client.send(request,
                                     HttpResponse.BodyHandlers.discarding());
@@ -138,9 +151,9 @@ public final class LoadGen {
                                 openLoop.add((completed - dueNanos) / 1_000L);
                                 closedLoop.add((completed - sendStart) / 1_000L);
                                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                                    successes.incrementAndGet();
+                                    successes.addAndGet(batchSize);
                                 } else {
-                                    failures.incrementAndGet();
+                                    failures.addAndGet(batchSize);
                                 }
                                 buckets.add(new TimelineBucket(
                                         (int) ((completed - warmupStart - warmupNanos) / 1_000_000_000L),
@@ -151,7 +164,7 @@ public final class LoadGen {
                             if (completed - warmupStart > warmupNanos) {
                                 openLoop.add((completed - dueNanos) / 1_000L);
                                 closedLoop.add((completed - sendStart) / 1_000L);
-                                failures.incrementAndGet();
+                                failures.addAndGet(batchSize);
                                 buckets.add(new TimelineBucket(
                                         (int) ((completed - warmupStart - warmupNanos) / 1_000_000_000L),
                                         -1));
@@ -180,20 +193,26 @@ public final class LoadGen {
         System.out.println("=== hookflow loadgen ===");
         System.out.println("tag               " + tag);
         System.out.println("target            " + url);
-        System.out.println("model             open loop, fixed rate");
-        System.out.println("rate              " + rate + " req/s");
+        System.out.println("model             open loop, fixed rate"
+                + (batchSize > 1 ? ", batch submit" : ""));
+        System.out.println("rate              " + rate + " events/s"
+                + (batchSize > 1
+                        ? "  (" + String.format(Locale.ROOT, "%.2f", rate / (double) batchSize) + " req/s)"
+                        : ""));
+        System.out.println("batch size        " + batchSize + " event(s) per request");
         System.out.println("duration          " + durationSeconds + "s (after " + warmupSeconds + "s warmup)");
         System.out.println("senders           " + threads + " threads, peak in flight " + peakInFlight.get());
-        System.out.println("payload           " + payload.length + " bytes");
+        System.out.println("payload           " + payloadBytes + " bytes per event");
         System.out.println("requests          " + total);
         System.out.println("succeeded         " + successes.get()
-                + " (" + percent(successes.get(), total) + ")");
+                + " events (" + percent(successes.get(), total) + ")");
         System.out.println("failed            " + failures.get()
-                + " (" + percent(failures.get(), total) + ")");
+                + " events (" + percent(failures.get(), total) + ")");
         System.out.println("throughput        " + String.format(Locale.ROOT, "%.1f", total / elapsedSeconds)
-                + " req/s");
-        printSamples("latency, open loop (coordinated-omission corrected)", openLoop);
-        printSamples("latency, closed loop (what a naive tool reports)", closedLoop);
+                + " events/s");
+        String perRequest = batchSize > 1 ? " (per request, " + batchSize + " events each)" : "";
+        printSamples("latency" + perRequest + ", open loop (coordinated-omission corrected)", openLoop);
+        printSamples("latency" + perRequest + ", closed loop (what a naive tool reports)", closedLoop);
 
         if (!openLoop.isEmpty() && !closedLoop.isEmpty()) {
             long openP99 = openLoop.percentile(99.0);
@@ -204,7 +223,7 @@ public final class LoadGen {
         }
 
         if (timelinePath != null && !timelinePath.isBlank()) {
-            writeTimeline(timelinePath, buckets, rate);
+            writeTimeline(timelinePath, buckets, batchSize);
             System.out.println("timeline          " + timelinePath);
         }
         System.out.println("=== end ===");
@@ -233,17 +252,18 @@ public final class LoadGen {
         return String.format(Locale.ROOT, "%.2f%%", 100.0 * part / total);
     }
 
-    private static void writeTimeline(String path, List<TimelineBucket> buckets, int rate) throws IOException {
+    private static void writeTimeline(String path, List<TimelineBucket> buckets, int batchSize)
+            throws IOException {
         Map<Integer, int[]> bySecond = new LinkedHashMap<>();
         synchronized (buckets) {
             for (TimelineBucket bucket : buckets) {
                 int[] counts = bySecond.computeIfAbsent(bucket.second(), key -> new int[3]);
                 if (bucket.status() >= 200 && bucket.status() < 300) {
-                    counts[0]++;
+                    counts[0] += batchSize;
                 } else if (bucket.status() == 429) {
-                    counts[1]++;
+                    counts[1] += batchSize;
                 } else {
-                    counts[2]++;
+                    counts[2] += batchSize;
                 }
             }
         }
@@ -270,23 +290,49 @@ public final class LoadGen {
     }
 
     /**
-     * A JSON body of approximately {@code bytes} bytes.
+     * A single-event JSON body of approximately {@code bytes} bytes.
      *
      * <p>The filler is incompressible on purpose: a payload of repeated characters
      * would make any transport compression look like a capacity gain that does not
      * exist for real traffic.
      */
-    private static byte[] payload(int bytes) {
-        int filler = Math.max(16, bytes - 64);
-        StringBuilder sb = new StringBuilder(bytes + 32);
+    private static byte[] eventPayload(int bytes) {
+        StringBuilder sb = new StringBuilder(bytes + 64);
         sb.append("{\"eventType\":\"load.gen\",\"payload\":{\"data\":\"");
-        java.util.Random random = new java.util.Random(42);
-        String alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-        for (int i = 0; i < filler; i++) {
-            sb.append(alphabet.charAt(random.nextInt(alphabet.length())));
-        }
+        appendFiller(sb, Math.max(16, bytes - 64));
         sb.append("\"}}");
         return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A batch body carrying {@code batchSize} events of roughly {@code bytesPerEvent}
+     * each, with a distinct idempotency key per event so a retried run can never
+     * collapse into the previous run's events.
+     */
+    private static byte[] batchPayload(int batchSize, int bytesPerEvent, long runId, long requestIndex) {
+        int filler = Math.max(16, bytesPerEvent - 96);
+        StringBuilder sb = new StringBuilder(batchSize * (bytesPerEvent + 64) + 16);
+        sb.append("{\"events\":[");
+        for (int i = 0; i < batchSize; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append("{\"eventType\":\"load.gen\",\"payload\":{\"data\":\"");
+            appendFiller(sb, filler);
+            sb.append("\"},\"idempotencyKey\":\"loadgen-")
+                    .append(runId).append('-').append(requestIndex).append('-').append(i)
+                    .append("\"}");
+        }
+        sb.append("]}");
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void appendFiller(StringBuilder sb, int length) {
+        java.util.Random random = new java.util.Random(42);
+        String alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+        for (int i = 0; i < length; i++) {
+            sb.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        }
     }
 
     private static Map<String, String> parse(String[] args) {

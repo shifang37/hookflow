@@ -24,7 +24,8 @@ public record HookFlowProperties(
         Fairness fairness,
         Backpressure backpressure,
         Worker worker,
-        Demo demo) {
+        Demo demo,
+        Retention retention) {
 
     /** Outbound HTTP behaviour towards customer endpoints. */
     public record Delivery(
@@ -173,5 +174,22 @@ public record HookFlowProperties(
      * @param simulatorRatePerSecond default events per second of the simulated business systems
      */
     public record Demo(boolean enabled, int receiverPort, int simulatorRatePerSecond) {
+    }
+
+    /**
+     * Retention of history tables that grow with traffic.
+     *
+     * <p>{@code delivery_attempt} is the one that only ever gets read during an
+     * incident, so it is pruned on a schedule instead of being kept forever; before
+     * v0.4 it had no policy at all and would have become the largest table within
+     * months. See {@code docs/operations.md §6}.
+     *
+     * @param attemptDays  how long a finished attempt row is kept; {@code 0} disables
+     *                     pruning entirely. Rows that are still {@code IN_PROGRESS}
+     *                     are never deleted, whatever this value is — the retention
+     *                     window is therefore only a *floor* for in-flight history
+     * @param intervalMs   how often the sweeper runs
+     */
+    public record Retention(int attemptDays, int intervalMs) {
     }
 }

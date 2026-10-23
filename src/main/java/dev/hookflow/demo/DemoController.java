@@ -3,6 +3,7 @@ package dev.hookflow.demo;
 import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.domain.delivery.Delivery;
 import dev.hookflow.fairness.AdmissionControl;
+import dev.hookflow.common.RetryOnLockConflict;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.persistence.DeliveryMapper;
 import dev.hookflow.persistence.OutboxMapper;
@@ -71,6 +72,7 @@ public class DemoController {
     private final AdmissionControl admission;
     private final MeterRegistry meterRegistry;
     private final HookFlowProperties properties;
+    private final RetryOnLockConflict retryOnLockConflict;
 
     public DemoController(DemoRegistry registry,
                           BusinessSimulator simulator,
@@ -81,7 +83,8 @@ public class DemoController {
                           DeliveryService deliveryService,
                           AdmissionControl admission,
                           MeterRegistry meterRegistry,
-                          HookFlowProperties properties) {
+                          HookFlowProperties properties,
+                          RetryOnLockConflict retryOnLockConflict) {
         this.registry = registry;
         this.simulator = simulator;
         this.receiver = receiver;
@@ -92,6 +95,7 @@ public class DemoController {
         this.admission = admission;
         this.meterRegistry = meterRegistry;
         this.properties = properties;
+        this.retryOnLockConflict = retryOnLockConflict;
     }
 
     @GetMapping(value = "/state", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -252,12 +256,24 @@ public class DemoController {
     /**
      * Wipes the demo tenants' events so a scenario can start from zero again.
      *
-     * <p>Retried, and deliberately not one transaction. Stopping the simulator does
-     * not stop the requests already in flight, so a delivery can be inserted between
-     * "delete attempts" and "delete deliveries" and the foreign key rejects the
-     * second statement. That is not a bug to design away — it is the same
-     * bulk-delete-vs-row-insert interaction as {@code docs/failures/0007} — so the
-     * reset simply runs again until the tables are actually empty.
+     * <p>Two different races are handled, because they are different problems:
+     *
+     * <ul>
+     *   <li><b>Lock conflict inside the delete block</b> — the four statements run
+     *       as one retried unit through the shared
+     *       {@link RetryOnLockConflict} ({@code hookflow.db.lock_conflict{operation=
+     *       "demo.reset"}}). Note the unit is <em>not</em> one transaction: each
+     *       DELETE autocommits, so a conflict on the third one leaves the first two
+     *       applied — which is exactly why the retry requires every statement here to
+     *       be idempotent. Same bulk-delete-vs-row-write interaction as
+     *       {@code docs/failures/0007}.</li>
+     *   <li><b>A row inserted between two of the deletes</b> — stopping the simulator
+     *       does not stop requests already in flight, so a delivery can appear
+     *       between "delete attempts" and "delete deliveries" and the foreign key
+     *       rejects the later statement. That one is not a lock conflict and retrying
+     *       it ten milliseconds later does not help; the reset simply runs another
+     *       round until the tables are actually empty.</li>
+     * </ul>
      */
     @PostMapping("/reset")
     public Map<String, Object> reset() throws InterruptedException {
@@ -265,16 +281,12 @@ public class DemoController {
         receiver.mode(DemoReceiver.Mode.OK);
         List<Long> tenantIds = registry.tenants().stream().map(DemoTenant::tenantId).toList();
 
-        int attempts = 0;
-        int outbox = 0;
-        int deliveries = 0;
-        int events = 0;
+        Deleted deleted = new Deleted(0, 0, 0, 0);
         for (int round = 1; round <= 6; round++) {
             try {
-                attempts = Math.max(attempts, demoMapper.deleteAttempts(tenantIds));
-                outbox = Math.max(outbox, demoMapper.deleteOutbox(tenantIds));
-                deliveries = Math.max(deliveries, demoMapper.deleteDeliveries(tenantIds));
-                events = Math.max(events, demoMapper.deleteEvents(tenantIds));
+                Deleted thisRound = retryOnLockConflict.execute("demo.reset",
+                        () -> deleteDemoRows(tenantIds));
+                deleted = deleted.maxOf(thisRound);
             } catch (org.springframework.dao.DataAccessException racingIngest) {
                 // An ingest committed between two deletes; a new round cleans up.
             }
@@ -288,8 +300,31 @@ public class DemoController {
 
         receiver.resetCounters();
         simulator.resetCounters();
-        return Map.of("attempts", attempts, "outbox", outbox,
-                "deliveries", deliveries, "events", events);
+        return Map.of("attempts", deleted.attempts(), "outbox", deleted.outbox(),
+                "deliveries", deleted.deliveries(), "events", deleted.events());
+    }
+
+    /**
+     * The four deletes, in foreign-key order. Reported as the maximum over rounds
+     * because a delete that threw was rolled back and the next round deletes the
+     * rows again; the honest number is the largest batch any single round removed.
+     */
+    private Deleted deleteDemoRows(List<Long> tenantIds) {
+        return new Deleted(
+                demoMapper.deleteAttempts(tenantIds),
+                demoMapper.deleteOutbox(tenantIds),
+                demoMapper.deleteDeliveries(tenantIds),
+                demoMapper.deleteEvents(tenantIds));
+    }
+
+    private record Deleted(int attempts, int outbox, int deliveries, int events) {
+
+        Deleted maxOf(Deleted other) {
+            return new Deleted(Math.max(attempts, other.attempts),
+                    Math.max(outbox, other.outbox),
+                    Math.max(deliveries, other.deliveries),
+                    Math.max(events, other.events));
+        }
     }
 
     private long counter(String name, String... tags) {

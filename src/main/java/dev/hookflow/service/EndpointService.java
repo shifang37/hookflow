@@ -1,5 +1,6 @@
 package dev.hookflow.service;
 
+import dev.hookflow.common.RetryOnLockConflict;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.crypto.SecretCipher;
@@ -7,9 +8,6 @@ import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.persistence.AuditLogMapper;
 import dev.hookflow.persistence.DeliveryMapper;
 import dev.hookflow.persistence.EndpointMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -25,10 +23,7 @@ import java.util.List;
 @Service
 public class EndpointService {
 
-    private static final Logger log = LoggerFactory.getLogger(EndpointService.class);
-
     private static final int SECRET_BYTES = 32;
-    private static final int DEADLOCK_ATTEMPTS = 3;
 
     private final EndpointMapper endpointMapper;
     private final DeliveryMapper deliveryMapper;
@@ -37,6 +32,7 @@ public class EndpointService {
     private final HookFlowProperties properties;
     private final EgressGuard egressGuard;
     private final TransactionTemplate transactionTemplate;
+    private final RetryOnLockConflict retryOnLockConflict;
     private final SecureRandom random = new SecureRandom();
 
     public EndpointService(EndpointMapper endpointMapper,
@@ -45,7 +41,8 @@ public class EndpointService {
                            SecretCipher secretCipher,
                            HookFlowProperties properties,
                            EgressGuard egressGuard,
-                           TransactionTemplate transactionTemplate) {
+                           TransactionTemplate transactionTemplate,
+                           RetryOnLockConflict retryOnLockConflict) {
         this.endpointMapper = endpointMapper;
         this.deliveryMapper = deliveryMapper;
         this.auditLogMapper = auditLogMapper;
@@ -53,6 +50,7 @@ public class EndpointService {
         this.properties = properties;
         this.egressGuard = egressGuard;
         this.transactionTemplate = transactionTemplate;
+        this.retryOnLockConflict = retryOnLockConflict;
     }
 
     public record CreatedEndpoint(Endpoint endpoint, String signingSecret) {
@@ -115,28 +113,20 @@ public class EndpointService {
      * deliveries. Already-delivering attempts are left to finish and record their
      * outcome; resume does not resurrect cancelled deliveries.
      *
-     * <p><b>Deadlock is expected here and retried.</b> The cancel is one bulk
-     * {@code UPDATE ... WHERE endpoint_id = ? AND status IN (...)} while the workers
-     * are claiming and settling individual rows in primary-key order. InnoDB can
-     * pick that bulk statement as the deadlock victim, and that is not a bug to be
-     * designed away — it is what a long-running status change against a hot table
+     * <p><b>Deadlock is expected here and retried</b> by the shared
+     * {@link RetryOnLockConflict} component (metric
+     * {@code hookflow.db.lock_conflict{operation="endpoint.pause"}}). The cancel is
+     * one bulk {@code UPDATE ... WHERE endpoint_id = ? AND status IN (...)} while the
+     * workers are claiming and settling individual rows in primary-key order. InnoDB
+     * can pick that bulk statement as the deadlock victim, and that is not a bug to
+     * be designed away — it is what a long-running status change against a hot table
      * looks like. Retrying the whole transaction is the standard answer; the
-     * operation is idempotent, so a replay is harmless. Found by
-     * {@code FairnessIT}; see {@code docs/failures/0007-cancel-vs-claim-deadlock.md}.
+     * operation is idempotent, so a replay is harmless. Found by {@code FairnessIT};
+     * see {@code docs/failures/0007-cancel-vs-claim-deadlock.md}.
      */
     public Endpoint pause(long tenantId, long endpointId) {
-        for (int attempt = 1; ; attempt++) {
-            try {
-                return transactionTemplate.execute(status -> pauseInTransaction(tenantId, endpointId));
-            } catch (PessimisticLockingFailureException e) {
-                if (attempt >= DEADLOCK_ATTEMPTS) {
-                    throw e;
-                }
-                log.warn("Transient lock conflict while pausing endpoint {} (attempt {}); retrying",
-                        endpointId, attempt);
-                sleepQuietly(20L * attempt);
-            }
-        }
+        return retryOnLockConflict.execute("endpoint.pause",
+                () -> transactionTemplate.execute(status -> pauseInTransaction(tenantId, endpointId)));
     }
 
     private Endpoint pauseInTransaction(long tenantId, long endpointId) {
@@ -157,13 +147,5 @@ public class EndpointService {
         endpointMapper.updateStatus(endpointId, tenantId, Endpoint.ACTIVE);
         auditLogMapper.insert(tenantId, "api-key", "endpoint.resume", "endpoint", endpointId, "{}");
         return require(tenantId, endpointId);
-    }
-
-    private static void sleepQuietly(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }

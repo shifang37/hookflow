@@ -77,6 +77,23 @@ public class BacklogGate {
      *                      tenant is over its own watermark
      */
     public void check(long tenantId) {
+        check(tenantId, 0);
+    }
+
+    /**
+     * The batch-aware form: the request will add {@code incomingEvents} rows to the
+     * backlog if it is accepted, so it is judged against the watermark it would
+     * create, not the one that exists before it.
+     *
+     * <p>Without this, a 500-event batch could jump a 10 000-row watermark by 5% per
+     * request while every individual request looked "under the line" — the batch
+     * endpoint would be a way around load shedding, which is the one thing shedding
+     * must not have. {@code incomingEvents = 0} keeps the single-event behaviour
+     * exactly as it was.
+     *
+     * @param incomingEvents how many backlog rows this request would add
+     */
+    public void check(long tenantId, int incomingEvents) {
         HookFlowProperties.Backpressure config = properties.backpressure();
         if (config == null) {
             return;
@@ -86,19 +103,23 @@ public class BacklogGate {
         }
         refreshIfStale(config);
 
-        long tenantBacklog = tenantBacklogs.getOrDefault(tenantId, 0L);
+        int incoming = Math.max(0, incomingEvents);
+        long tenantBacklog = tenantBacklogs.getOrDefault(tenantId, 0L) + incoming;
+        long platformBacklog = globalBacklog + incoming;
+        String adds = incoming > 0 ? " (" + incoming + " in this request)" : "";
 
-        if (config.outboxHighWatermark() > 0 && globalBacklog >= config.outboxHighWatermark()) {
+        if (config.outboxHighWatermark() > 0 && platformBacklog >= config.outboxHighWatermark()) {
             shed("platform", config);
             throw new ApiException(ErrorCode.OVER_CAPACITY,
-                    "Platform backlog is " + globalBacklog + " events; not accepting more right now",
+                    "Platform backlog is " + globalBacklog + " events" + adds
+                            + "; not accepting more right now",
                     config.retryAfterSeconds());
         }
         if (config.tenantHighWatermark() > 0 && tenantBacklog >= config.tenantHighWatermark()) {
             shed("tenant", config);
             throw new ApiException(ErrorCode.TENANT_BACKLOG_EXCEEDED,
-                    "Your backlog is " + tenantBacklog + " undelivered events; "
-                            + "slow down until it drains below " + config.tenantHighWatermark(),
+                    "Your backlog is " + tenantBacklogs.getOrDefault(tenantId, 0L) + " undelivered events" + adds
+                            + "; slow down until it drains below " + config.tenantHighWatermark(),
                     config.retryAfterSeconds());
         }
         clearSheddingIfRecovered();

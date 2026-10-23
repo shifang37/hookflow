@@ -82,7 +82,7 @@ TPS_max = min(
 | 现象（一眼能看出来） | 咬合的约束 | 先加谁 | 边际收益（实测/推算） |
 |---|---|---|---|
 | `hikaricp_connections_pending > 0` | B 连接 | `DB_POOL_SIZE`，必要时加只读副本给查询（ingest 仍写主库） | 本机 pending 恒为 0，所以**加连接池收益为 0** |
-| p99 随 ingest 速率上升，`pending=0`，CPU 空闲 | C 提交 | 改提交策略（fsync=2 / 批量提交）、换更快的盘、把 MySQL 挪到独立机器 | 实测 p99 −39%（300 req/s） |
+| p99 随 ingest 速率上升，`pending=0`，CPU 空闲 | C 提交 | 改提交策略（fsync=2 / **批量提交**）、换更快的盘、把 MySQL 挪到独立机器 | fsync=2：p99 −39%（300 req/s）；批量提交：同一到达率 450 events/s 下开环 p50 **1.10s → 42.7ms**（v0.4，见 [performance.md §14](performance.md)） |
 | outbox 积压增长但 worker 空闲 | D relay | **加 relay 实例**（`FOR UPDATE SKIP LOCKED` 已支持横向扩展） | 未实测 |
 | 接收方慢（p99 由 receiver 决定），worker 忙 | E worker | 加 worker（同一租户需同时调 `max_in_flight`，否则预算才是上限） | `容量 = 线程数 / 延迟`，线性 |
 | CPU 饱和（本机不是） | A | 加 api 实例 | 单机实测用不到 |
@@ -103,6 +103,7 @@ TPS_max = min(
 | relay 不是约束 | 450 req/s 时积压已开始增长，D 与 E 哪个先咬合**未测** | 对比 `hookflow_outbox_published_total` 与 worker 完成速率 |
 | 4C8G 与 14C/20T 的差别主要在 I/O | 如果 MySQL 与应用分机部署，结论会明显乐观 | 需要一台 4C8G 实测 |
 | 接收方 5ms | 真实客户公网 P99 常见 200ms+ | 用 `?delay=` 复现，见 `bench.ps1 -ReceiverDelayMs` |
+| **模型假设"一事件一事务"** | v0.4 的批量提交把一次提交摊到 N 条事件上，约束 C（提交）变成 `C_single / N` 量级。但 D（relay）与 E（worker）**不变**，所以批量只抬高**入口**容量，不抬高投递容量——用这批数字去定水位线会立刻让 outbox 堆起来 | [performance.md §14](performance.md)：同到达率 450 events/s 下 p50 1.10s → 42.7ms；900 events/s 时 outbox 仍在涨 |
 
 **没测到的东西，本文不写数字。** 上表第二、三行就是因此标了"未测"。
 

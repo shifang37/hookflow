@@ -113,6 +113,14 @@ hookflow:
     default-max-attempts: 8
     scan-interval-ms: 1000
     stuck-scan-interval-ms: 30000
+  # --- v0.4: retention of the attempt history --------------------------------
+  retention:
+    # delivery_attempt rows are deleted after this many days; 0 disables pruning.
+    # Must stay well above hookflow.lease.ttl-seconds: a row that is still
+    # IN_PROGRESS is never deleted, but the margin keeps the history of an attempt
+    # that was in flight when the process died around for the incident review.
+    attempt-days: 7
+    interval-ms: 3600000
   # --- v0.3: multi-tenant fairness over the outbox -> broker edge -------------
   fairness:
     # false = v0.2 behaviour (publish strictly in outbox id order, no admission

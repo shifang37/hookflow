@@ -53,7 +53,7 @@ UPDATE delivery SET status='SUCCEEDED', ...
 | # | 保证 | 实现手段 | 验证 |
 |---|---|---|---|
 | G1 | 事件一旦返回 202 并提交成功，就不会因为 MQ 故障而丢失 | event + delivery + outbox 同一 MySQL 事务 | `EventIngestIT` |
-| G2 | 同一 `(tenant, Idempotency-Key)` 只对应一个 event，且重复请求返回同一 `eventId` | `UNIQUE (tenant_id, idempotency_key)` | 20 线程并发 IT |
+| G2 | 同一 `(tenant, Idempotency-Key)` 只对应一个 event，且重复请求返回同一 `eventId`。**批量提交里的每一条同样成立**：一批里部分键已存在时，它们返回原来的 `eventId` 并标记 `replay`，不产生重复事件 | `UNIQUE (tenant_id, idempotency_key)` | `EventIngestIT`（20 线程并发）、`BatchIngestIT`（20 条夹 3 条已存在） |
 | G3 | 同一 `(event, endpoint)` 只有一条 delivery | `UNIQUE (event_id, endpoint_id)` | IT |
 | G4 | 同一 delivery 的第 N 次尝试不会被消费两次 | `attempt_count = attemptNo - 1` CAS | `claimIsExclusive` |
 | G5 | 已被回收的 delivery 不会被"死而复生"的旧 worker 覆盖 | `lease_token` fencing | `expiredLeaseIsReclaimed` |
@@ -143,6 +143,7 @@ v0.1/v0.2 的缺口现在都有了明确答案。**投递语义没有变化，�
 | 租户并发预算（`tenant.max_in_flight`） | 一个租户同时在投递中的条数有上限，超出的留在 outbox | 无。**吞吐**被该租户自己的预算限制，**延迟**不再被别人的积压影响 |
 | 端点并发上限（`endpoint.max_concurrency`） | 打到某个 URL 的并行调用有上限 | 无。排队发生在 outbox，仍是 at-least-once |
 | 入口降载（`42902` / `50301`） | 积压超水位时**拒绝新事件**，带 `Retry-After` | **有**：被拒的事件**没有被接受过**，所以 G1 仍然成立（"返回 202 就一定会投递"），但"所有事件都会被接受"不再成立 |
+| 批量提交（`POST /v1/events/batch`，v0.4） | N 条事件在一个事务里写入；部分重复按条返回 `replay`；同一批内重复的键解析到第一次出现；限流与降载**按条数计** | **无**：G1/G2/G3 对每一条仍然成立。整批被拒（400/429/503）时一条都没有被接受，所以不存在"半批成功"的语义 |
 | broker 队列长度上限 + `reject-publish` | 队列满时 broker 拒绝消息，relay 把行放回 `NEW` | 无。积压回到 MySQL，不丢、不重复 |
 | worker 超预算策略 | `defer`（默认，交给恢复器）/ `requeue`（立刻退回队列） | 无 |
 

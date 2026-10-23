@@ -1,0 +1,31 @@
+-- =====================================================================
+-- HookFlow v0.4 schema: give delivery_attempt a retention policy.
+--
+-- The outbox has been pruned since v0.2, the attempt history was not: one row
+-- per attempt, forever. It is only ever read while investigating an incident,
+-- which is exactly the kind of table that quietly becomes the largest one.
+--
+-- The sweeper deletes in bounded batches:
+--
+--   DELETE FROM delivery_attempt
+--    WHERE status <> 'IN_PROGRESS'
+--      AND started_at < DATE_SUB(NOW(3), INTERVAL ? DAY)
+--    LIMIT ?
+--
+-- hence an index on the column the WHERE clause ranges over. There is already
+-- uk_attempt_delivery_no (delivery_id, attempt_no), which is useless for a
+-- time-based delete: it would have to be a full table scan per batch.
+--
+-- IN_PROGRESS is excluded on purpose and not just for tidiness: DeliveryProcessor
+-- settles an attempt with
+--
+--   UPDATE ... WHERE delivery_id = ? AND attempt_no = ? AND status = 'IN_PROGRESS'
+--
+-- so deleting the row of a live attempt would make that UPDATE affect 0 rows and
+-- silently lose the attempt's outcome. The lease TTL (60s) bounds how long an
+-- IN_PROGRESS row can legitimately exist, and any row whose worker died is
+-- flipped to ABANDONED by the lease sweeper, so they are prunable later.
+-- =====================================================================
+
+ALTER TABLE delivery_attempt
+    ADD KEY idx_attempt_started (started_at);

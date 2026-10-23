@@ -67,6 +67,8 @@ v0.2 的建议是"先加 worker"，那是基于"接收方延迟是主要瓶颈"�
 | `hookflow_outbox_publish_rejected_total` | 持续 > 0 | broker 队列撞到 `x-max-length`。积压都在 MySQL 里，没有丢，但要检查 relay 是否空转 |
 | `hookflow_fairness_skipped_over_budget_total` | 持续 > 0 | 调度器跳过了超预算的行。正常现象，用来判断是"预算在起作用"还是"预算定小了" |
 | `hookflow_worker_over_capacity_total{policy}` | 持续 > 0 | worker 收到的消息超过租户/端点预算。若持续出现，说明 `refresh-interval-ms` 太长或有人手工绕过了 relay |
+| `hookflow_db_lock_conflict_total{operation}` | 持续升高（偶发 > 0 正常） | 有事务在死锁/锁等待里被选为牺牲者并被重试（`operation` = `endpoint.pause` / `demo.reset`）。**偶发是正常的**：死锁是 InnoDB 的正常调度结果，重试是正确的处理方式。持续升高说明有批量操作在撞热点，见 §4。`docs/failures/0007` 的两次真实死锁在 v0.4 之前是靠异常栈抓到的，有了这个指标才能看到"被重试成功"的那部分 |
+| `hookflow_attempt_pruned_total` | 长期为 0 且表在涨 | attempt 清理没有生效：检查 `hookflow.retention.attempt-days` 是否被设成 `0`、清理任务是否在跑、以及 `delivery_attempt.started_at` 上是否有 `idx_attempt_started`。该指标只在真的删了行时增加，长时间为 0 在低流量下是正常的 |
 | `hikaricp_connections_pending` | 长期 > 0 | **连接池是瓶颈**，加池子或加只读副本（见 capacity.md §4） |
 
 ### 正常的"看起来像故障"的指标
@@ -118,7 +120,7 @@ curl -X POST localhost:8080/v1/endpoints/7/pause -H "Authorization: Bearer $TOKE
 效果：新事件不再为它创建 delivery；已有的 `PENDING`/`RETRY_WAIT` 变为 `CANCELED`。
 **注意：`CANCELED` 是终态，resume 不会复活它们。** 如需补投，请对具体 delivery 重放（当前不支持重放 CANCELED）。
 
-**并发坑（v0.3 发现，见 [failures/0007](failures/0007-cancel-vs-claim-deadlock.md)）**：这个操作是"按 endpoint_id 批量 UPDATE"，与 worker 的"按主键逐行认领"加锁顺序相反，在高并发下会被 InnoDB 选为死锁牺牲者。`EndpointService.pause` 已做**事务级重试（3 次，递增退避）**，所以对操作者是透明的；但如果以后新增任何"按维度批量改状态"的运维操作，**必须同样加重试**，否则它会在压力下随机失败。
+**并发坑（v0.3 发现，见 [failures/0007](failures/0007-cancel-vs-claim-deadlock.md)）**：这个操作是"按 endpoint_id 批量 UPDATE"，与 worker 的"按主键逐行认领"加锁顺序相反，在高并发下会被 InnoDB 选为死锁牺牲者。v0.4 起重试逻辑已抽成公共组件 `common/RetryOnLockConflict`（3 次 + 递增退避 + `hookflow.db.lock_conflict{operation}` 指标），`EndpointService.pause` 与 `DemoController.reset` 共用同一实现。**以后新增任何"按维度批量改状态/批量删除"的运维操作，必须调用它**，否则它会在压力下随机失败；`RetryOnLockConflictTest` 只覆盖组件本身，新调用点要自己加一条验证。
 
 ### 调整一个租户的并发预算
 
@@ -174,16 +176,29 @@ published_at    < DATE_SUB(NOW(3), INTERVAL #{staleSeconds} SECOND)
 - [ ] 应用 `TZ=UTC`（镜像已内置）
 - [ ] 若使用托管数据库，确认其默认时区不是 `SYSTEM` 且宿主为本地时区
 
-## 6. 数据保留（v0.1 未实现，需在 v0.2 补）
+## 6. 数据保留（v0.4 已实现两张表）
 
-当前 `outbox` 表只增不删，会无限增长。上线前必须补：
+两张只增不减的表现在都有清理策略，都由定时任务按批删除，都遵守同一条规则：**删的是已经结束的历史，不是还在进行中的工作**。
+
+| 表 | 配置 | 默认 | `0` 的含义 | 清理条件 | 指标 |
+|---|---|---|---|---|---|
+| `outbox` | `hookflow.relay.retention-days` | 7 天 | 关闭 | `status='PUBLISHED' AND published_at < NOW(3) - INTERVAL n DAY` | `hookflow_outbox_pruned_total` |
+| `delivery_attempt` | `hookflow.retention.attempt-days` | 7 天 | 关闭 | `status <> 'IN_PROGRESS' AND started_at < NOW(3) - INTERVAL n DAY` | `hookflow_attempt_pruned_total` |
+
+单批上限 5 000 行、每次 tick 最多 20 批（`hookflow.retention.interval-ms`，默认 1 小时）。批量而不是一条大 DELETE，是因为后者会长时间持锁，把 relay / worker 一起拖住。
+
+**`delivery_attempt` 的 `IN_PROGRESS` 例外是硬约束，不是优化。** `DeliveryProcessor.settle` 用它收尾：
 
 ```sql
--- 建议：每日清理已发布的 outbox，保留 7 天
-DELETE FROM outbox WHERE status = 'PUBLISHED' AND published_at < NOW() - INTERVAL 7 DAY LIMIT 10000;
+UPDATE delivery_attempt SET status='SUCCEEDED', ...
+ WHERE delivery_id = ? AND attempt_no = ? AND status = 'IN_PROGRESS';
 ```
 
-同理 `delivery_attempt` 的 `response_preview` 也应考虑归档。
+行被删掉时这条语句**更新 0 行且不报错**，一次在途尝试的结果就静默丢了。所以清理 SQL 里带 `status <> 'IN_PROGRESS'`，并且这个条件写在 SQL 里而不是 Java 里——它是唯一无法被调用方绕过的地方。崩溃留下的 `IN_PROGRESS` 行会被 lease 回收器改成 `ABANDONED`，之后正常按时间老去。
+
+**保留期 ≥ `hookflow.lease.ttl-seconds` + 1 天**是前提：一次尝试最长只会在 `IN_PROGRESS` 停留一个 lease TTL（默认 60s）。默认 7 天给了两个数量级以上的余量；`DeliveryAttemptRetentionTest.shippedRetentionWindowCoversTheLease` 直接读 `application.yml` 钉住这个前提，改任一值都会让测试失败。
+
+表继续涨时先查这四件事：配置是不是 `0`、清理任务是否在跑、`idx_attempt_started` 是否还在（`V3` 迁移加的）、以及是不是流量本身涨了。
 
 ## 7. 升级与迁移
 

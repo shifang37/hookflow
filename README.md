@@ -47,7 +47,9 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 
 完整报告（含 GC 日志、JFR 证据、fsync A/B、**以及测量方法本身犯过的三个错误**）：[docs/performance.md](docs/performance.md)。容量模型与"扩容先加谁"：[docs/capacity.md](docs/capacity.md)。
 
-> README 里出现的每一个数字都对应 `docs/perf/2026-10-22/` 下的一份原始输出。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
+**v0.4 批量提交**（`POST /v1/events/batch`，20 条/请求，同一台机器、同一天、改造前后各两次对照）：同一到达率 450 events/s 下，单条路径开环 p50 / p99 = **1.10 s / 2.31 s**，批量 = **42.7 ms / 69.5 ms**；批量到 900 events/s 仍 100% 接受（p99 1.39 s）。**这是入口指标，不是投递指标**——下游排空未变，单条路径的 p99 对照也**未测出差异**（散布 64–289 ms）。数字、方法与"没证明什么"：[performance.md §14](docs/performance.md)。
+
+> README 里出现的每一个数字都对应 `docs/perf/` 下的一份原始输出（v0.3 在 `2026-10-22/`，v0.4 批量在 `2026-10-23-batch/`）。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
 
 ---
 
@@ -271,6 +273,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | `POST` | `/v1/endpoints/{id}/pause` | 暂停（并取消排队中的投递） |
 | `POST` | `/v1/endpoints/{id}/resume` | 恢复（已取消的不复活） |
 | `POST` | `/v1/events` | 提交事件，需 `Idempotency-Key` |
+| `POST` | `/v1/events/batch` | 一次提交最多 500 条事件（一个事务，按条返回 `replay`） |
 | `GET` | `/v1/events/{id}` | 查事件 |
 | `GET` | `/v1/deliveries` | 查投递（按 event / status 过滤） |
 | `GET` | `/v1/deliveries/{id}` | 查投递 + 全部 attempt |
@@ -291,8 +294,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 73 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 73 单元 + 28 集成 = 101 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（约 7 分钟）
+./mvnw test      # 96 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
+./mvnw verify    # 96 单元 + 36 集成 = 132 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 4 分 23 秒）
 ```
 
 | 测试 | 证明的命题 |
@@ -307,8 +310,14 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | `AdmissionControlTest` | 预算边界、endpoint 上限只挡自己、**本地计数在刷新前就已生效**（否则一次会发出整批） |
 | `BacklogGateTest` | 平台级 503 / 租户级 429 分开；`Retry-After`；计数每区间只算一次 |
 | `DeliveryMessageTest` | `traceparent` JSON 往返；**v0.2 的旧 outbox 行仍能解析**（否则升级时最后几行会进 DLQ） |
-| `EndpointPauseRetryTest` | 死锁牺牲者会被重试（见 failures/0007），审计只写一次 |
+| `EndpointPauseRetryTest` | 死锁牺牲者会被重试（见 failures/0007），审计只写一次，且走的是公共重试组件（指标 +1） |
+| `RetryOnLockConflictTest` | 只重试锁冲突（含锁等待超时）；3 次后原样抛出；`hookflow_db_lock_conflict_total` 在 Prometheus 文本格式里可见 |
+| `DemoResetRetryTest` | 演示控制台的重置也走同一个组件；非锁异常不会被组件吞掉（外层多轮循环仍然负责 FK 竞争） |
+| `DeliveryAttemptRetentionTest` | `attempt-days=0` 完全不发 SQL；批次循环有界；**保留期 ≥ lease TTL + 1 天**这条前提直接读 `application.yml` 验证 |
+| `TenantRateLimiterTest` | 限流按**事件数**计：一批 20 条要 20 个配额，超了整批 429 |
 | `EventIngestIT` | 20 并发同幂等键 → 1 个事件；扇出过滤；claim 互斥；lease 回收；outbox 唯一键允许下一轮 |
+| `BatchIngestIT` | 真实 HTTP：20 条夹 3 条已存在的幂等键 → 20 个正确 `eventId`、事件与投递都不重复；整批重放返回 200 且 id 不变；批内重复键 → 一个事件；超过 500 条整批 400 |
+| `AttemptRetentionIT` | 真实 MySQL：30 天前的 attempt 被清理、`IN_PROGRESS` 的一条无论多老都保留、`V3` 索引存在、清理后 settle 仍能命中行 |
 | `EndToEndDeliveryIT` | 真实链路 2xx/5xx/4xx/replay/pause 五种结局 |
 | `ReceiverFaultIT` | 慢接收方 → `TIMEOUT`；连接被拒 → `CONNECT_ERROR`；故障消失后**同一个** delivery 自动成功 |
 | `BrokerOutageIT` | broker 冻结期间事件仍被接受、不产生任何 attempt、工作停在 outbox；恢复后自动追平且只尝试一次 |
@@ -368,6 +377,8 @@ GET /actuator/prometheus
 | `hookflow.ingest.shed{scope=tenant\|platform}` | 入口降载次数，按"租户自己的问题"和"平台的问题"分开 |
 | `hookflow.outbox.backlog` | 未发布积压（gauge），**容量规划与告警的主指标** |
 | `hookflow.worker.over_capacity{policy}` | worker 收到的消息超过租户/端点预算 |
+| `hookflow.attempt.pruned` | `delivery_attempt` 被清理的行数（v0.4；0 表示清理关闭或没有到期数据） |
+| `hookflow.db.lock_conflict{operation}` | 事务级死锁/锁等待被重试的次数（v0.4；`endpoint.pause`、`demo.reset`）。**偶发 > 0 是正常的**，持续升高说明批量操作在撞热点 |
 
 ### 分布式 trace（v0.3）
 
@@ -406,6 +417,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | `hookflow.security.egress.allow-private-targets` | **false** | SSRF 防护：默认拒绝回环/私有/链路本地/云元数据地址。仅 `all`（本地演示）profile 打开 |
 | `hookflow.security.egress.allowed-hosts` | `[]` | 显式放行的 host 白名单，优先于范围检查 |
 | `hookflow.relay.retention-days` | 7 | PUBLISHED 的 outbox 行保留天数，0 关闭清理 |
+| `hookflow.retention.attempt-days` | 7 | `delivery_attempt` 保留天数（**`IN_PROGRESS` 的行永不删除**），0 关闭清理 |
+| `hookflow.retention.interval-ms` | 3600000 | attempt 清理任务的运行周期 |
 | `hookflow.relay.max-queue-length` | 20000 | broker 队列长度上限（`reject-publish`）。**改这个值需要删队列**：RabbitMQ 不允许改已声明队列的参数 |
 | `hookflow.fairness.enabled` | true | 公平调度总开关。`false` = v0.2 行为（按 id 发布、无准入），用于对照测量 |
 | `hookflow.fairness.refresh-interval-ms` | 1000 | 在途计数刷新周期；越短预算越紧、查询越多 |
@@ -438,6 +451,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - [ADR-0010](docs/adr/0010-backpressure-and-shedding.md) — 为什么过载时在入口淘汰，而不是在内部排队
 - [ADR-0011](docs/adr/0011-distributed-tracing.md) — 为什么 trace 上下文放进 payload，而不仅是 MQ header
 - [ADR-0012](docs/adr/0012-demo-console.md) — 为什么演示控制台打进应用（静态页 + 条件 bean），而不是独立前端工程
+- [ADR-0013](docs/adr/0013-batch-ingest.md) — 为什么批量摄入是「一个事务 + 每条自己的幂等键」，而不是请求级事务或部分成功
 
 ---
 
@@ -450,7 +464,6 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
-- `delivery_attempt` 没有保留策略（`outbox` 有）
 - `stale-publishing-seconds` 一个值两用（崩溃窗口 + worker `defer` 延迟），出现真实误判再拆
 - **性能数据只覆盖单机单进程拓扑**，且 wrk2 / async-profiler 两项没有跑成（本机没有二进制、镜像拉取失败），已在 [performance.md §13](docs/performance.md) 明确标注
 - 演示控制台的**前端没有自动化测试**（没有 Playwright）；接口契约由 `DemoConsoleIT` 覆盖，页面本身靠手工与截图验证。而且 `/v1/demo/**` 无鉴权，只应在本地 `all` profile 打开
@@ -496,7 +509,7 @@ src/main/resources/static/demo/
 └── style.css
 
 docs/
-├── adr/             12 条架构决策（含 0009/0010/0011/0012）
+├── adr/             13 条架构决策（含 0009/0010/0011/0012/0013）
 ├── failures/        真实缺陷复盘与演练记录（含 0007）
 ├── perf/            压测原始输出（报告引用的唯一来源）
 ├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么

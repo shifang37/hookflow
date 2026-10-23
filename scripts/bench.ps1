@@ -4,8 +4,18 @@
 # Micrometer counters, MySQL state, and the machine spec the numbers belong to.
 #
 #   .\scripts\bench.ps1 -Scenario api      -Rate 200  -Duration 30
+#   .\scripts\bench.ps1 -Scenario api      -Rate 450  -Duration 30 -BatchSize 20
 #   .\scripts\bench.ps1 -Scenario overload -Rate 600  -Duration 30
 #   .\scripts\bench.ps1 -Scenario fairness -Rate 300  -Duration 12
+#
+# -Rate is always events/s. -BatchSize > 1 switches the generator to
+# POST /v1/events/batch (that many events per request), which is how the v0.4
+# batch-ingest claim is measured: same arrival rate, fewer transactions.
+#
+# The `api` scenario disables the per-tenant watermark unless -TenantWatermark is
+# given, because the `all` profile sets it to 200 for the demo console and a
+# capacity run that inherits a demo value measures shedding instead of capacity.
+# Use `overload` (not `api`) when the shedding threshold itself is the variable.
 #
 # Prerequisite: docker compose up -d   (use DB_PUBLISH_PORT if 3306 is taken)
 #               .\mvnw.cmd -DskipTests package
@@ -27,6 +37,7 @@ param(
     [int]$Warmup = 5,
     [int]$Threads = 4,
     [int]$PayloadBytes = 2048,
+    [int]$BatchSize = 1,
     [int]$DbPort = 13306,
     [int]$FloodEventsForFairness = 10,
     [int]$FloodBudget = 4,
@@ -49,7 +60,7 @@ foreach ($k in @('no_proxy')) {
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$runDir = Join-Path $root "bench-results\$stamp-$Scenario"
+$runDir = Join-Path $root "bench-results\$stamp-$Scenario-b$BatchSize"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
 $java = $null
@@ -76,6 +87,10 @@ $jar = $jarItem.FullName
 $baseUrl = 'http://localhost:8080'
 $receiverPort = 9099
 $bootstrapToken = 'hookflow-dev-bootstrap-token'
+
+# The generator's --rate is events/s in both modes, so the URL and the body shape
+# are the only things that change between the single-event and batch runs.
+$ingestUrl = if ($BatchSize -gt 1) { "$baseUrl/v1/events/batch" } else { "$baseUrl/v1/events" }
 
 # Fixed heap: a bench whose heap size changes between runs measures the heap, not
 # the code. GC logging and JFR are always on so the report has evidence, not just
@@ -105,6 +120,14 @@ if ($TenantWatermark -gt 0) {
     # Lowering the per-tenant watermark is how you turn "latency explodes" into
     # "the platform says no": same arrival rate, different shedding threshold.
     $appArgs += "--hookflow.backpressure.tenant-high-watermark=$TenantWatermark"
+} elseif ($Scenario -eq 'api') {
+    # The `all` profile lowers the tenant watermark to 200 for the demo console
+    # (application-all.yml). A capacity run that inherits it measures *shedding*,
+    # not capacity: at 300 events/s almost every request comes back 429 and the
+    # latencies look excellent because they are the latencies of rejections.
+    # The api scenario therefore disables the per-tenant watermark unless the
+    # caller asked for a specific one.
+    $appArgs += '--hookflow.backpressure.tenant-high-watermark=1000000'
 }
 $receiverQuery = ''
 if ($ReceiverDelayMs -gt 0) {
@@ -258,9 +281,9 @@ try {
 
             $loadgen = Join-Path $runDir 'loadgen.txt'
             & $java -cp $classes dev.hookflow.tools.LoadGen `
-                --url "$baseUrl/v1/events" --api-key $tenant.apiKey `
+                --url $ingestUrl --api-key $tenant.apiKey `
                 --rate $Rate --duration $Duration --warmup $Warmup --threads $Threads `
-                --payload-bytes $PayloadBytes --tag $Scenario `
+                --payload-bytes $PayloadBytes --batch-size $BatchSize --tag $Scenario `
                 --timeline (Join-Path $runDir 'timeline.csv') 2>&1 | Tee-Object -FilePath $loadgen
         }
         'overload' {
@@ -271,9 +294,9 @@ try {
 
             $loadgen = Join-Path $runDir 'loadgen.txt'
             & $java -cp $classes dev.hookflow.tools.LoadGen `
-                --url "$baseUrl/v1/events" --api-key $tenant.apiKey `
+                --url $ingestUrl --api-key $tenant.apiKey `
                 --rate $Rate --duration $Duration --warmup $Warmup --threads $Threads `
-                --payload-bytes $PayloadBytes --tag $Scenario `
+                --payload-bytes $PayloadBytes --batch-size $BatchSize --tag $Scenario `
                 --timeline (Join-Path $runDir 'timeline.csv') 2>&1 | Tee-Object -FilePath $loadgen
             Stamp "outbox backlog right after the run: $(Get-Unpublished)"
             Start-Sleep -Seconds 15
@@ -412,14 +435,25 @@ try {
     $os = Get-CimInstance Win32_OperatingSystem
     $meta = @()
     $meta += "scenario        $Scenario"
-    $meta += "rate            $Rate req/s (open loop)"
+    $meta += "rate            $Rate events/s (open loop)"
+    $meta += "batch size      $BatchSize event(s) per request ($ingestUrl)"
     $meta += "duration        $Duration s (warmup $Warmup s)"
     $meta += "senders         $Threads"
     $meta += "payload         $PayloadBytes bytes"
     $meta += "host cpu        $($cpu.Name), $($cpu.NumberOfCores)C/$($cpu.NumberOfLogicalProcessors)T"
     $meta += "host memory     $([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)) GiB"
     $meta += "os              $($os.Caption) build $($os.BuildNumber)"
-    $meta += "java            $((cmd /c "`"$java`" -version 2>&1" | Select-Object -First 1))"
+    # `java -version` writes to stderr, and with ErrorActionPreference=Stop that
+    # becomes a terminating NativeCommandError - the same trap as Invoke-Sql.
+    $javaVersion = 'unknown'
+    try {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $javaVersion = (& $java -version 2>&1 | Select-Object -First 1)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    $meta += "java            $javaVersion"
     $meta += "jvm args        $($jvmArgs -join ' ')"
     $meta += "app args        $($appArgs -join ' ')"
     $meta += "git             $(git rev-parse --short HEAD)"

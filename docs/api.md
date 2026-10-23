@@ -37,10 +37,10 @@ API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
 | 40901 | `IDEMPOTENCY_KEY_REUSED` | 409 | 幂等键复用 |
 | 40902 | `ENDPOINT_PAUSED` | 409 | endpoint 已暂停 |
 | 40903 | `ILLEGAL_TRANSITION` | 409 | 状态不允许该操作（如重放非 DEAD 的投递） |
-| 42900 | `RATE_LIMITED` | 429 | 超出租户速率 |
+| 42900 | `RATE_LIMITED` | 429 | 超出租户速率（**按事件数计**，一批 500 条要 500 个配额） |
 | 42902 | `TENANT_BACKLOG_EXCEEDED` | 429 | **该租户**未投递积压超过水位线，带 `Retry-After` |
 | 50000 | `INTERNAL` | 500 | 未预期错误（细节只在日志里，用 requestId 查） |
-| 50300 | `DEPENDENCY_UNAVAILABLE` | 503 | 依赖不可用（限流 fail-closed 时的 Redis） |
+| 50300 | `DEPENDENCY_UNAVAILABLE` | 503 | 依赖不可用（限流 fail-closed 时的 Redis；或批量接口整批未提交） |
 | 50301 | `OVER_CAPACITY` | 503 | 平台整体过载，正在降载，带 `Retry-After` |
 
 ---
@@ -173,6 +173,65 @@ curl -X POST localhost:8080/v1/events \
 | `503` `OVER_CAPACITY` | 平台整体过载 | 按 `Retry-After` 退避；这不是租户的问题 |
 
 ### GET /v1/events/{id}
+
+---
+
+## 批量提交（v0.4）
+
+### POST /v1/events/batch
+
+一次 HTTP 提交最多 500 条事件，**在一个事务里**写入 event / delivery / outbox。
+
+```bash
+curl -X POST localhost:8080/v1/events/batch \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "events": [
+          {"eventType":"order.paid","payload":{"orderId":1001,"amount":99.00},
+           "idempotencyKey":"order-1001-paid"},
+          {"eventType":"order.paid","payload":{"orderId":1002,"amount":19.00},
+           "idempotencyKey":"order-1002-paid"}
+        ]
+      }'
+```
+
+`202`（至少一条是新事件）或 `200`（全部是重放）：
+
+```json
+[
+  {"index": 0, "eventId": 1, "deliveryCount": 2, "replay": false},
+  {"index": 1, "eventId": 2, "deliveryCount": 2, "replay": false}
+]
+```
+
+| 字段 | 含义 |
+|---|---|
+| `index` | 该条在请求 `events[]` 里的下标；结果与请求顺序一一对应，但**按 `index` 配对更稳** |
+| `eventId` | 这条事件的 id。幂等键已存在时返回**原来那个** id |
+| `deliveryCount` | 该事件的投递条数（匹配到的 endpoint 数） |
+| `replay` | `true` = 这条没有创建新事件：幂等键以前就存在，**或者**它在同一批里重复了前面某条 |
+
+约束与语义：
+
+- `events` 长度 1–500。**超过 500 是整批 400，不会截断执行**——截断会让调用方以为自己提交了 500 条
+- 每条都要自己的 `idempotencyKey`（1–255 字符，租户内唯一）。**没有请求级 `Idempotency-Key` 头**：一批是一个事件集合，不是一个可以整体重放的请求
+- 部分重复**不是错误**：预先存在的键按条返回 `replay:true` + 原 `eventId`，其余照常写入。同一批内重复的键解析到**第一次出现**创建的那个事件
+- 整批失败（如 MySQL 不可用）返回 `503` `DEPENDENCY_UNAVAILABLE`：一个事务，一条都没提交，所以**用同一批幂等键原样重试是安全的**
+- 校验错误（`eventType` 不合法、`payload` 缺失、键超长）返回 `400`，错误消息里带 `events[i]` 下标
+
+**限流与降载按条数计，不按请求数**：
+
+| 机制 | 单条接口 | 批量接口 |
+|---|---|---|
+| 租户速率（Redis 固定窗口） | 1 次请求 = 1 个配额 | N 条 = **N 个配额**；整批超配额则整批 `429` |
+| 平台/租户水位线 | 按当前积压判断 | 按 `当前积压 + N` 判断，一批不能一次跳过水位线 |
+
+不做按条计的话，批量接口就是绕过限流和降载的最短路径。
+
+**吞吐提升来自哪里**：来自**减少事务与往返次数**（一批一次 `INSERT ... VALUES (...),(...)`、一次提交），**不是来自并发**。批量请求仍然在一个连接上、一个事务里串行执行；并发的收益要靠多个客户端同时提交。
+
+**语义没有变化**：每一条被接受的事件仍然走同一条链路，at-least-once、不保证顺序、接收方按 `event_id` 去重——这些都不因为批量而改变。
 
 ---
 

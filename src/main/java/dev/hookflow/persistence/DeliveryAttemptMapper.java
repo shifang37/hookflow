@@ -1,6 +1,7 @@
 package dev.hookflow.persistence;
 
 import dev.hookflow.domain.delivery.DeliveryAttempt;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -48,4 +49,26 @@ public interface DeliveryAttemptMapper {
                AND status = 'IN_PROGRESS'
             """)
     int abandon(@Param("deliveryId") long deliveryId, @Param("attemptNo") int attemptNo);
+
+    /**
+     * Prunes attempt history that is older than the retention window.
+     *
+     * <p><b>{@code IN_PROGRESS} rows are never touched.</b> {@link #finish} has
+     * {@code status = 'IN_PROGRESS'} in its WHERE clause, so deleting the row of a
+     * live attempt would make the settle update affect zero rows and the attempt
+     * outcome would be lost without any error. The lease TTL bounds how long a row
+     * can legitimately stay in that state, and the lease sweeper flips the rows of
+     * dead workers to {@code ABANDONED}, after which they age out normally.
+     *
+     * <p>Bounded by {@code batchSize} on purpose: an unbounded DELETE over months of
+     * history would be one long lock hold, and the sweeper can simply run again.
+     */
+    @Delete("""
+            DELETE FROM delivery_attempt
+             WHERE status <> 'IN_PROGRESS'
+               AND started_at < DATE_SUB(NOW(3), INTERVAL #{retentionDays} DAY)
+             LIMIT #{batchSize}
+            """)
+    int deleteFinishedBefore(@Param("retentionDays") int retentionDays,
+                             @Param("batchSize") int batchSize);
 }

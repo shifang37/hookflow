@@ -55,11 +55,20 @@ for (int attempt = 1; ; attempt++) {
 
 捕获 `PessimisticLockingFailureException`（而不是只有 `DeadlockLoserDataAccessException`）是因为锁等待超时 `CannotAcquireLockException` 是同一个父类，两者都该重试。
 
+**v0.4 更新：已抽象为公共组件。** 同一段循环当时在两个地方各写了一遍（`EndpointService.pause`、`DemoController.reset`），第三次一定会忘。现在它是 `dev.hookflow.common.RetryOnLockConflict`：
+
+- 只重试 `PessimisticLockingFailureException`（覆盖死锁牺牲与锁等待超时），其它异常一律不重试；
+- 3 次尝试 + 递增退避（20ms / 40ms），耗尽后把冲突原样抛回调用方，不吞；
+- 每次冲突都计数 `hookflow.db.lock_conflict{operation}`，所以"每次都重试成功"不会把死锁率藏起来（这正是本节「遗留」里缺的那块）；
+- 契约要求调用方传入的是**整个事务**，且必须是幂等的。
+
+`EndpointPauseRetryTest` 现在断言 pause 走的是这个组件（重试 2 次、审计只写一条、指标 +1），组件本身由 `RetryOnLockConflictTest` 覆盖（包括 `/actuator/prometheus` 的文本格式里能看到 `hookflow_db_lock_conflict_total`）。
+
 ## 回归测试
 
 `EndpointPauseRetryTest`：第一次调用 `cancelPendingForEndpoint` 抛 `DeadlockLoserDataAccessException`，第二次成功；断言 `pause` 最终返回 PAUSED、审计日志只写一条、且确实重试过（`verify(times(2))`）。
 
 ## 遗留
 
-- 同一个模式还有别处：`retry`/`replay`/`resume` 都是小事务，不批量，风险低；但**将来任何"按维度批量改状态"的操作都要么重试、要么按主键分片**。这条写进 `docs/operations.md`。
-- 没有做"死锁率"指标。真实部署里 `DeadlockLoserDataAccessException` 的计数应该被监控，因为它和"暂停/批量操作撞上热点"强相关。
+- 同一个模式还有别处：`retry`/`replay`/`resume` 都是小事务，不批量，风险低；但**将来任何"按维度批量改状态"的操作都要么走 `RetryOnLockConflict`、要么按主键分片**。这条写进 `docs/operations.md`。
+- ~~没有做"死锁率"指标~~ → v0.4 已补：`hookflow.db.lock_conflict{operation}`，见上。真正的"死锁率"面板（除以 ingest 总量）是 `docs/v0.4-plan.md` 的 C3。
