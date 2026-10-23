@@ -1,0 +1,57 @@
+﻿hikaricp_connections{application="hookflow",pool="hookflow-pool"} 32.0
+hikaricp_connections_acquire_seconds_count{application="hookflow",pool="hookflow-pool"} 170564
+hikaricp_connections_acquire_seconds_sum{application="hookflow",pool="hookflow-pool"} 112.3270257
+hikaricp_connections_acquire_seconds_max{application="hookflow",pool="hookflow-pool"} 0.1844959
+hikaricp_connections_active{application="hookflow",pool="hookflow-pool"} 0.0
+hikaricp_connections_creation_seconds_count{application="hookflow",pool="hookflow-pool"} 0
+hikaricp_connections_creation_seconds_sum{application="hookflow",pool="hookflow-pool"} 0.0
+hikaricp_connections_creation_seconds_max{application="hookflow",pool="hookflow-pool"} 0.0
+hikaricp_connections_idle{application="hookflow",pool="hookflow-pool"} 32.0
+hikaricp_connections_max{application="hookflow",pool="hookflow-pool"} 32.0
+hikaricp_connections_min{application="hookflow",pool="hookflow-pool"} 32.0
+hikaricp_connections_pending{application="hookflow",pool="hookflow-pool"} 0.0
+hikaricp_connections_timeout_total{application="hookflow",pool="hookflow-pool"} 0.0
+hikaricp_connections_usage_seconds_count{application="hookflow",pool="hookflow-pool"} 170564
+hikaricp_connections_usage_seconds_sum{application="hookflow",pool="hookflow-pool"} 2075.173
+hikaricp_connections_usage_seconds_max{application="hookflow",pool="hookflow-pool"} 0.282
+hookflow_consumer_acked_total{application="hookflow"} 31974.0
+hookflow_delivery_succeeded_total{application="hookflow"} 31974.0
+hookflow_fairness_admitted_total{application="hookflow"} 31974.0
+hookflow_outbox_backlog{application="hookflow"} 1.0
+hookflow_outbox_published_total{application="hookflow"} 31974.0
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="GET",outcome="SERVER_ERROR",status="503",uri="/actuator/health"} 1
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="GET",outcome="SERVER_ERROR",status="503",uri="/actuator/health"} 0.3748442
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/health"} 1
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/health"} 0.004097
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/prometheus"} 14
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/prometheus"} 1.2866314
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="200",uri="/v1/events"} 5
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="200",uri="/v1/events"} 0.0633143
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/admin/tenants"} 1
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/admin/tenants"} 0.0183267
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/endpoints"} 1
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/endpoints"} 0.0162992
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events"} 719
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events"} 31.378977
+http_server_requests_seconds_count{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events/batch"} 1575
+http_server_requests_seconds_sum{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events/batch"} 97.7072281
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="GET",outcome="SERVER_ERROR",status="503",uri="/actuator/health"} 0.3748442
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/health"} 0.004097
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="GET",outcome="SUCCESS",status="200",uri="/actuator/prometheus"} 0.2308289
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="200",uri="/v1/events"} 0.0209022
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/admin/tenants"} 0.0183267
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="201",uri="/v1/endpoints"} 0.0162992
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events"} 0.2378989
+http_server_requests_seconds_max{application="hookflow",error="none",exception="none",method="POST",outcome="SUCCESS",status="202",uri="/v1/events/batch"} 0.3264556
+jvm_gc_pause_seconds_count{action="end of minor GC",application="hookflow",cause="CodeCache GC Threshold",gc="G1 Young Generation"} 1
+jvm_gc_pause_seconds_sum{action="end of minor GC",application="hookflow",cause="CodeCache GC Threshold",gc="G1 Young Generation"} 0.003
+jvm_gc_pause_seconds_count{action="end of minor GC",application="hookflow",cause="G1 Evacuation Pause",gc="G1 Young Generation"} 46
+jvm_gc_pause_seconds_sum{action="end of minor GC",application="hookflow",cause="G1 Evacuation Pause",gc="G1 Young Generation"} 0.156
+jvm_gc_pause_seconds_count{action="end of minor GC",application="hookflow",cause="GCLocker Initiated GC",gc="G1 Young Generation"} 1
+jvm_gc_pause_seconds_sum{action="end of minor GC",application="hookflow",cause="GCLocker Initiated GC",gc="G1 Young Generation"} 0.008
+jvm_gc_pause_seconds_count{action="end of minor GC",application="hookflow",cause="Metadata GC Threshold",gc="G1 Young Generation"} 1
+jvm_gc_pause_seconds_sum{action="end of minor GC",application="hookflow",cause="Metadata GC Threshold",gc="G1 Young Generation"} 0.013
+jvm_gc_pause_seconds_max{action="end of minor GC",application="hookflow",cause="CodeCache GC Threshold",gc="G1 Young Generation"} 0.003
+jvm_gc_pause_seconds_max{action="end of minor GC",application="hookflow",cause="G1 Evacuation Pause",gc="G1 Young Generation"} 0.008
+jvm_gc_pause_seconds_max{action="end of minor GC",application="hookflow",cause="GCLocker Initiated GC",gc="G1 Young Generation"} 0.008
+jvm_gc_pause_seconds_max{action="end of minor GC",application="hookflow",cause="Metadata GC Threshold",gc="G1 Young Generation"} 0.013

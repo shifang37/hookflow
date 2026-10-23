@@ -1,0 +1,41 @@
+﻿n	total_s	avg_ms	rows_per_call	lock_s	digest
+65921	1573.88	23.875	0.0	0.00	COMMIT
+31872	21.96	0.689	1.0	0.04	UPDATE `delivery` SET STATUS = ? , `attempt_count` = `attempt_count` + ? , `lease_token` = ? , `lease_until` = DATE_ADD 
+668	16.44	24.616	47.9	0.00	UPDATE `outbox` SET STATUS = ? , `published_at` = NOW (?) WHERE `id` IN (...)
+31869	15.26	0.479	1.0	0.03	UPDATE `delivery` SET STATUS = ? , `lease_token` = ? , `lease_until` = ? , `next_attempt_at` = ? , `attempt_count` = ? ,
+31922	9.49	0.297	1.0	0.04	UPDATE `delivery_attempt` SET STATUS = ? , `status_code` = ? , `response_preview` = ? , `error_class` = ? , `duration_ms
+31925	9.32	0.292	1.0	0.03	INSERT INTO `delivery_attempt` ( `delivery_id` , `attempt_no` , STATUS ) VALUES (...)
+135398	7.26	0.054	0.0	0.00	SELECT @@SESSION . `transaction_read_only`
+133376	6.03	0.045	0.0	0.00	SET `autocommit` = ?
+31559	4.52	0.143	0.0	0.04	SELECT * FROM `delivery` WHERE `id` = ?
+31714	4.13	0.130	0.0	0.03	SELECT * FROM EVENT WHERE `id` = ?
+1575	3.01	1.914	20.0	0.00	INSERT INTO EVENT ( `tenant_id` , `event_type` , `payload` , `idempotency_key` ) VALUES (...) /* , ... */
+31881	2.95	0.093	0.0	0.03	SELECT * FROM `endpoint` WHERE `id` = ?
+1575	1.71	1.086	20.0	0.00	INSERT INTO `outbox` ( `aggregate_type` , `aggregate_id` , `attempt_no` , `payload` , `tenant_id` , `endpoint_id` , STAT
+668	1.56	2.329	47.9	0.00	UPDATE `outbox` SET STATUS = ? , `publishing_since` = NOW (?) , `publish_attempts` = `publish_attempts` + ? WHERE `id` I
+1575	1.54	0.978	20.0	0.00	INSERT INTO `delivery` ( `tenant_id` , `event_id` , `endpoint_id` , STATUS , `attempt_count` , `max_attempts` ) VALUES (
+3150	1.13	0.360	0.0	0.00	SELECT * FROM EVENT WHERE `tenant_id` = ? AND `idempotency_key` IN (...)
+1575	0.43	0.273	0.0	0.00	SELECT * FROM `delivery` WHERE `tenant_id` = ? AND `event_id` IN (...)
+2310	0.38	0.164	0.0	0.00	SELECT * FROM `endpoint` WHERE `tenant_id` = ? AND STATUS = ?
+2312	0.35	0.150	0.0	0.00	SELECT * FROM `api_key` WHERE `key_prefix` = ?
+490	0.33	0.677	1.0	0.01	INSERT INTO `outbox` ( `aggregate_type` , `aggregate_id` , `attempt_no` , `payload` , `tenant_id` , `endpoint_id` , STAT
+740	0.31	0.420	1.0	0.00	INSERT INTO EVENT ( `tenant_id` , `event_type` , `payload` , `idempotency_key` ) VALUES (...)
+700	0.31	0.441	0.0	0.00	SELECT * FROM `outbox` WHERE STATUS = ? ORDER BY `id` LIMIT ? FOR UPDATE SKIP LOCKED
+489	0.30	0.620	1.0	0.00	INSERT INTO `delivery` ( `tenant_id` , `event_id` , `endpoint_id` , STATUS , `attempt_count` , `max_attempts` ) VALUES (
+2309	0.29	0.127	0.0	0.00	SELECT * FROM `tenant` WHERE `id` = ?
+171	0.27	1.586	0.0	0.00	SELECT `tenant_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `outbox` WHERE STATUS IN (...) GROUP BY `tenant_id`
+171	0.20	1.172	0.0	0.00	SELECT COUNT ( * ) FROM `outbox` WHERE STATUS IN (...)
+1478	0.16	0.111	0.0	0.00	SELECT * FROM EVENT WHERE `tenant_id` = ? AND `idempotency_key` = ?
+183	0.06	0.345	0.0	0.00	SELECT `tenant_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `delivery` WHERE STATUS = ? GROUP BY `tenant_id`
+489	0.06	0.119	0.0	0.00	SELECT * FROM `delivery` WHERE `event_id` = ? AND `endpoint_id` = ?
+183	0.06	0.314	0.0	0.00	SELECT `endpoint_id` AS `id` , COUNT ( * ) AS `in_flight` FROM `delivery` WHERE STATUS = ? GROUP BY `endpoint_id`
+183	0.02	0.124	0.0	0.00	SELECT `id` , `max_concurrency` FROM `endpoint` WHERE STATUS = ? AND `max_concurrency` > ?
+183	0.02	0.124	0.0	0.00	SELECT `id` , `max_in_flight` , `weight` FROM `tenant` WHERE STATUS = ?
+3	0.01	4.489	1.0	0.00	INSERT INTO `tenant` ( NAME , `rate_limit` , STATUS ) VALUES (...)
+4	0.01	2.558	0.0	0.00	SELECT * FROM `delivery` WHERE STATUS = ? AND `updated_at` < DATE_SUB ( NOW (?) , INTERVAL ? SQL_TSI_SECOND ) ORDER BY `
+40	0.01	0.242	0.0	0.00	SELECT * FROM `delivery` WHERE STATUS = ? AND `next_attempt_at` <= NOW (?) ORDER BY `next_attempt_at` LIMIT ?
+32	0.01	0.265	0.0	0.00	SELECT @@SESSION . `auto_increment_increment` AS `auto_increment_increment` , @@`character_set_client` AS `character_set
+1	0.00	3.153	0.0	0.00	SELECT `VARIABLE_VALUE` FROM `performance_schema` . `global_variables` WHERE `variable_name` = ?
+3	0.00	1.039	0.0	0.00	SELECT `TABLE_SCHEMA` AS `TABLE_CAT` , ? AS `TABLE_SCHEM` , TABLE_NAME , CASE WHEN `TABLE_TYPE` = ? THEN CASE WHEN `TABL
+32	0.00	0.080	0.0	0.00	SET `character_set_results` = ?
+2	0.00	0.947	0.0	0.00	SELECT COUNT (?) FROM `information_schema` . `schemata` WHERE SCHEMA_NAME = ? LIMIT ?

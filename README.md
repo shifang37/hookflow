@@ -30,21 +30,28 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 ## 能扛多少（实测，v0.4）
 
 这台机器（i5-14600K 14C/20T、31.7GB、MySQL 8.4 in Docker、`all` profile 单 JVM、payload 2KB、开环压测）。
-**"入口能接多少"和"平台能送多少"是两个数字，差一个数量级——所以分开写。**
+**"入口能接多少"和"平台能送多少"是两个数字——所以分开写。** B7/B8 之后它们接近了（450 入口能被完整送达），
+但 900 入口仍然只能送出 ~400/s，差距没有消失。
 
 | 入口形态 | 到达率 | 接受率 | 开环 p50 / p99 | **平台持续投递（端到端）** |
 |---|---:|---:|---|---:|
 | 单条 `POST /v1/events` | 300 events/s | 100% | 33 / 111 ms | — |
-| 批量 20 条 | 450 events/s | 100% | 40 / **75 ms** | 41/s → **264/s**（worker 16 并发） |
-| 批量 20 条 | 900 events/s | 100% | 41 / **103 ms** | 39/s → **≥390/s**（relay 先满） |
+| 批量 20 条 | 450 events/s | 100% | 67 / **160 ms** | 41/s → **455–470/s**（outbox 不涨：worker 32 + relay batch 100） |
+| 批量 20 条 | 900 events/s | 100% | 79 / **298 ms** | **382–421/s**（worker 先满；relay 能发 449–731/s） |
 
-**结论：入口能接 900 events/s（批量，p99 103ms），但平台每秒真正送到客户的只有 ~264/s——这个上限来自 worker
-（每次投递两次提交），不是入口。** 两边的上限现在已经很接近（relay 400–466/s、worker 273–296/s），
-再往上就要合并提交次数：worker 的 settle，或 relay 的 claim/标记（[capacity.md §6](docs/capacity.md)）。
+**结论：B7/B8 之后，450 events/s 可以被完整送到客户（455–470/s，outbox 始终只有几十到 ~200 行、观察期归零）；
+900 时 worker 先满（382–421/s），relay 这时还有余量（batch 100 发 449/s、batch 200 发 731/s）。
+worker 的杠杆是**并发**（32 并发 + 池 32，不是提交次数），relay 的杠杆是 **batch-size**（50 → 100），
+而把 claim 与 markPublished 合并**不值得做**：900 下交付不是 relay 限制的（[performance.md §22.4](docs/performance.md#224-claim--markpublished-要不要合并不合并)）。**
 
-> 两次提升各有证据：B4 把 relay 的「逐条 confirm + 单行 UPDATE」批量化（41 → 400–466/s，[§16](docs/performance.md)、
+> 450 那行的 p99 160 ms 比 B5 时的 86.6 ms 高——32 并发下 ingest 与 worker 更频繁地抢同一批 DB 连接。
+> 这是吞吐换来的（§21.2 有对照）；它仍在 §14.3 记的本机 p99 散布之内，所以**不能**声称"32 并发没有让入口变慢"。
+
+> 三步各有证据：B4 把 relay 的「逐条 confirm + 单行 UPDATE」批量化（41 → 400–466/s，[§16](docs/performance.md)、
 > [ADR-0014](docs/adr/0014-batched-relay-publish.md)）；B5 把 worker 并发 8→16 并去掉 2→8 的爬坡
-> （158 → 283/s，[§18](docs/performance.md)）。prefetch 与连接池那一格也量了：prefetch 没用，池在 16 并发时刚好卡住。
+> （158 → 283/s，[§18](docs/performance.md)）；B7/B8 把并发再翻到 32、池 32，并把 relay 的 batch 提到 100
+> （264 → 455–470/s，[§21](docs/performance.md#21-worker-抬到-relay-之上32-并发--池-32v04-b7)、[§22](docs/performance.md#22-relay-batch-size-50--100--200每批的固定成本v04-b8)）。
+> prefetch 那一格也量了：**没用**；连接池在 32 并发下会到 2–5 个 pending，所以池跟着改成 32。
 
 三个最能说明问题的数字：
 
@@ -63,7 +70,7 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 **v0.4 批量提交**（`POST /v1/events/batch`，20 条/请求，同一台机器、同一天、改造前后各两次对照）：同一到达率 450 events/s 下，单条路径开环 p50 / p99 = **1.10 s / 2.31 s**，批量 = **42.7 ms / 69.5 ms**；批量到 900 events/s 仍 100% 接受（p99 1.39 s）。**这是入口指标，不是投递指标**——下游排空未变，单条路径的 p99 对照也**未测出差异**（散布 64–289 ms）。数字、方法与"没证明什么"：[performance.md §14](docs/performance.md)。
 下游那一半后来在 [§15](docs/performance.md) 补测（B0），并在 [§16](docs/performance.md) 修掉（B4，relay 41 → 400–466/s）。
 
-> README 里出现的每一个数字都对应 `docs/perf/` 下的一份原始输出（v0.3 在 `2026-10-22/`，v0.4 批量在 `2026-10-23-batch/`，下游再基线在 `2026-10-23-downstream/`，批量发布之后在 `2026-10-23-relay-batch/`）。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机）在报告里标了「未测」，不在这里猜。
+> README 里出现的每一个数字都对应 `docs/perf/` 下的一份原始输出（v0.3 在 `2026-10-22/`，v0.4 批量在 `2026-10-23-batch/`，下游再基线在 `2026-10-23-downstream/`，批量发布之后在 `2026-10-23-relay-batch/`，worker 并发在 `2026-10-23-worker/`，32 并发在 `2026-10-23-worker32/`，relay batch 曲线在 `2026-10-23-relay-batch-size/`）。没测的（wrk2 交叉验证、async-profiler 火焰图、4C8G 真机、32 并发对慢接收方）在报告里标了「未测」，不在这里猜。
 
 ---
 
@@ -422,7 +429,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | `hookflow.delivery.connect-timeout-ms` | 3000 | 连接接收方超时 |
 | `hookflow.delivery.read-timeout-ms` | 10000 | 读超时；慢接收方不能永久占住 worker 线程 |
 | `hookflow.lease.ttl-seconds` | 60 | lease 有效期，必须显著大于 read timeout |
-| `hookflow.relay.batch-size` | 50 | 单次 relay 领取行数 |
+| `hookflow.relay.batch-size` | **100** | 一次 claim / 一个 confirm 窗口的条数。v0.4 实测（[§22](docs/performance.md#22-relay-batch-size-50--100--200每批的固定成本v04-b8)）：450 入口下 50 只有 357–368/s 且 outbox 涨，100 是 470/s（outbox 平），200 没有进一步收益；900 入口下 50/100/200 发布 337/449/731/s。200 留给追积压（崩溃重复窗口随批大小变宽，见 ADR-0014） |
 | `hookflow.relay.stale-publishing-seconds` | 60 | PUBLISHING 多久视为可疑并重发 |
 | `hookflow.retry.base-delay-ms` / `max-delay-ms` | 5000 / 3600000 | 退避参数 |
 | `hookflow.retry.default-max-attempts` | 8 | 默认最大尝试次数 |
@@ -437,9 +444,11 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | `hookflow.fairness.enabled` | true | 公平调度总开关。`false` = v0.2 行为（按 id 发布、无准入），用于对照测量 |
 | `hookflow.fairness.refresh-interval-ms` | 1000 | 在途计数刷新周期；越短预算越紧、查询越多 |
 | `hookflow.worker.over-capacity-policy` | defer | 消息到达时租户/端点已满：`defer`（交给恢复器，最多等一个 stuck-scan 周期）或 `requeue`（立刻退回队列，烧 CPU） |
-| `spring.rabbitmq.listener.simple.concurrency`（`MQ_CONCURRENCY`） | **8** | worker 并发（= 同时在途的投递数）。v0.4 实测：8 → 158/s，16 → 273/s；从 2 起步的爬坡会浪费前 ~30 s，所以默认就是 8（[§18](docs/performance.md)） |
-| `spring.rabbitmq.listener.simple.max-concurrency`（`MQ_MAX_CONCURRENCY`） | **16** | 有积压时最多加到几个消费者。16 是"relay 追上来之前"的值：32 没有再快（那时 relay 先满），却会让慢接收方同时挨 32 个请求 |
+| `spring.rabbitmq.listener.simple.concurrency`（`MQ_CONCURRENCY`） | **32** | worker 并发（= 同时在途的投递数）。v0.4 实测：8 → 158/s，16 → 273/s，32 → 455–470/s（450 入口，配合 relay batch 100）；32 并发下 `hikaricp_connections_pending` 2–5，所以池也改成 32。从 2 起步的爬坡会浪费前 ~30 s，所以默认直接 32（[§18](docs/performance.md)、[§21](docs/performance.md#21-worker-抬到-relay-之上32-并发--池-32v04-b7)） |
+| `spring.rabbitmq.listener.simple.max-concurrency`（`MQ_MAX_CONCURRENCY`） | **32** | 有积压时最多加到几个消费者，默认与 `concurrency` 相同（钉死，避免爬坡）。**代价：一个接收方最多同时收到 32 个出站 POST**——慢接收方必须设 `endpoint.max_concurrency`（见下） |
 | `spring.rabbitmq.listener.simple.prefetch`（`MQ_PREFETCH`） | 8 | 一个消费者最多囤几条未确认消息。**实测对吞吐没有影响**（8 vs 32 在噪声内），调大只会把 `unacked` 从 64 抬到 512 |
+| `DB_POOL_SIZE`（环境变量） | **32** | Hikari 连接池上限。32 并发下 `pending` 2–5；16 在 32 并发下会成为限制（B5 的 16 并发 + 池 16 已经到 3）。api-only 进程可以调低 |
+| `endpoint.max_concurrency`（建 endpoint 的 `maxConcurrency` 字段 / 列 `endpoint.max_concurrency`） | **0（不限）** | 单个 endpoint 允许的并发出站请求上限。**默认 32 并发意味着一个接收方最多同时挨 32 个 POST**；慢/脆的接收方必须显式设这个上限（例如 4–8），否则它会占满 32 个 worker 并让同一租户的其他投递排队。这是 B7 的已知风险，**没有用慢接收方实测过**（[§21.4](docs/performance.md#214-这一节没有证明什么)） |
 | `hookflow.backpressure.outbox-high-watermark` | 100000 | 平台级未发布积压 → `503` + `Retry-After`；0 关闭 |
 | `hookflow.backpressure.tenant-high-watermark` | 10000 | 租户级未发布积压 → `429` + `Retry-After`；**应按"目标等待 × 排空速率"定，不是越大越好**（见 capacity.md） |
 | `hookflow.backpressure.retry-after-seconds` | 5 | 降载响应里的 `Retry-After` |
@@ -483,6 +492,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
 - `stale-publishing-seconds` 一个值两用（崩溃窗口 + worker `defer` 延迟），出现真实误判再拆
+- **worker 默认 32 并发 = 一个 endpoint 最多同时挨 32 个出站 POST**，而 `endpoint.max_concurrency` 默认不限
+  （0）；慢/脆的接收方需要显式设这个上限。这一格**没有用慢接收方实测**（[performance.md §21.4](docs/performance.md#214-这一节没有证明什么)）
 - **性能数据只覆盖单机单进程拓扑**，且 wrk2 / async-profiler 两项没有跑成（本机没有二进制、镜像拉取失败），已在 [performance.md §13](docs/performance.md) 明确标注
 - 演示控制台的**前端没有自动化测试**（没有 Playwright）；接口契约由 `DemoConsoleIT` 覆盖，页面本身靠手工与截图验证。而且 `/v1/demo/**` 无鉴权，只应在本地 `all` profile 打开
 

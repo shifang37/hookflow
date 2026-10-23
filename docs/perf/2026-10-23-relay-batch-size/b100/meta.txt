@@ -1,0 +1,16 @@
+﻿scenario        api
+rate            900 events/s (open loop)
+batch size      20 event(s) per request (http://localhost:8080/v1/events/batch)
+duration        60 s (warmup 10 s)
+senders         24
+payload         2048 bytes
+host cpu        Intel(R) Core(TM) i5-14600K, 14C/20T
+host memory     31.7 GiB
+os              Microsoft Windows 11 专业版 build 26200
+java            java version "21.0.10" 2026-01-20 LTS
+jvm args        -Duser.timezone=UTC -Xms512m -Xmx512m -XX:+UseG1GC -Xlog:gc*:file=D:\Code\hookflow\bench-results\20261023-192933-api-b20\gc.log:time,uptime,level,tags -XX:StartFlightRecording=filename=D:\Code\hookflow\bench-results\20261023-192933-api-b20\jfr.jfr,settings=profile,dumponexit=true
+app args        --spring.profiles.active=all --hookflow.security.egress.allow-private-targets=true --hookflow.fairness.refresh-interval-ms=500 --hookflow.relay.interval-ms=200 --server.port=8080 --hookflow.relay.batch-size=100 --hookflow.backpressure.tenant-high-watermark=1000000
+worker env      set MQ_CONCURRENCY=32; set MQ_MAX_CONCURRENCY=32; set MQ_PREFETCH=8; set DB_POOL_SIZE=32
+git             dd56f8a
+docker          29.6.2
+started         20261023-192933

@@ -1,0 +1,18 @@
+# 450 events/s, batch 20, warmup 10s, load 60s, tail 20s
+
+ elapsed   phase  accept/s  publish/s  succeed/s    backlog delivPend mqReady mqUnack hikPend reject/s   lock/s
+     6.9  WARMUP      29.7      401.9      340.5        316       808     359     256    3.0        -        -
+    13.7    LOAD      29.8      494.1      443.7        120       849     535     256    1.0        -        -
+    19.9    LOAD      29.9      440.3      435.5        121       960     643     256    1.0        -        -
+    26.4    LOAD      30.5      466.3      450.3        143      1014     790     256    4.0        -        -
+    32.9    LOAD      30.1      452.8      461.0         81       970     650     256    4.0        -        -
+    39.5    LOAD      30.3      461.8      441.6        100      1037     695     256    1.0        -        -
+    45.9    LOAD      30.1      448.5      475.9        141       906     707     256    5.0        -        -
+    52.5    LOAD      30.0      458.9      431.9         62      1068     777     256    1.0        -        -
+    59.0    LOAD      30.4      451.4      433.0        124      1209     797     256    3.0        -        -
+    66.2    LOAD      29.9      457.3      392.7        103      1649    1213     256    3.0        -        -
+    72.8    TAIL      21.0      285.3      484.3          0       176       0       0    0.0        -        -
+    78.7    TAIL       7.7        5.1       47.1          1         1       0       0    0.0        -        -
+    85.4    TAIL       7.8        4.8        5.1          1         1       0       0    0.0        -        -
+
+# steady-window publish rate: mean 459.0 events/s over 9 intervals (min 440.3, max 494.1)

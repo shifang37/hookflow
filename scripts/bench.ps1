@@ -66,6 +66,10 @@ param(
     [int]$MqMaxConcurrency = 0,
     [int]$MqPrefetch = 0,
     [int]$DbPoolSize = 0,
+    # Relay batch knob (v0.4 B8: is "one commit per batch" the relay's residual
+    # cost?). 0 keeps hookflow.relay.batch-size from application.yml, so the
+    # default is measured by a run that does not pass it.
+    [int]$RelayBatchSize = 0,
     # Downstream sampling (v0.4 B0). 0 keeps the old behaviour: one snapshot at the end.
     [int]$SampleSeconds = 0,
     [int]$TailSeconds = 0,
@@ -143,6 +147,9 @@ $appArgs = @(
     '--hookflow.relay.interval-ms=200',
     "--server.port=8080"
 )
+if ($RelayBatchSize -gt 0) {
+    $appArgs += "--hookflow.relay.batch-size=$RelayBatchSize"
+}
 if ($TenantWatermark -gt 0) {
     # Lowering the per-tenant watermark is how you turn "latency explodes" into
     # "the platform says no": same arrival rate, different shedding threshold.
@@ -162,10 +169,10 @@ if ($ReceiverDelayMs -gt 0) {
 }
 
 # The worker and pool knobs are read from the environment (application.yml:
-# ${MQ_CONCURRENCY:2}, ${MQ_MAX_CONCURRENCY:8}, ${MQ_PREFETCH:8},
-# ${DB_POOL_SIZE:16}), so they go into the child's .bat instead of $appArgs. They
-# are recorded in meta.txt, because "135 events/s" is meaningless without the
-# concurrency it was measured at.
+# ${MQ_CONCURRENCY}, ${MQ_MAX_CONCURRENCY}, ${MQ_PREFETCH}, ${DB_POOL_SIZE}), so
+# they go into the child's .bat instead of $appArgs. They are recorded in
+# meta.txt, because "135 events/s" is meaningless without the concurrency it was
+# measured at.
 $envLines = @()
 if ($MqConcurrency -gt 0) { $envLines += "set MQ_CONCURRENCY=$MqConcurrency" }
 if ($MqMaxConcurrency -gt 0) { $envLines += "set MQ_MAX_CONCURRENCY=$MqMaxConcurrency" }

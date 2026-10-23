@@ -12,7 +12,13 @@ spring:
     password: ${DB_PASSWORD:hookflow}
     hikari:
       pool-name: hookflow-pool
-      maximum-pool-size: ${DB_POOL_SIZE:16}
+      # 32, not 16: at 32 concurrent attempts (see the listener below) two commits
+      # per delivery, plus relay claims and ingest, keep ~30 connections busy.
+      # With a pool of 16 the pool is the limit again - v0.4 B7 measured
+      # hikaricp_connections_pending at 2-5 with 32 connections, and B5 measured
+      # pending 3 at 16 concurrency with a pool of 16.
+      # An api-only process can lower this; the worker role is the one that needs it.
+      maximum-pool-size: ${DB_POOL_SIZE:32}
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -30,18 +36,22 @@ spring:
         # how many extra messages one thread may hold unacknowledged. Together
         # they decide how much work the broker may push before it must wait.
         #
-        # v0.4 measured this cell (docs/performance.md §18): after the relay was
-        # batched, two commits per delivery are what limits the worker, so the only
-        # cheap lever is concurrency. 8 concurrent attempts delivered 158/s, 16
-        # delivered ~280/s, and at 32 the relay became the constraint again (~390/s
-        # with the broker queue empty), so 32 buys nothing until the relay is faster.
-        # Starting at 2 and ramping to 8 wasted the first ~30 s of every run, hence
-        # 8 as the floor. Prefetch made no difference at any level measured (8 vs 32
-        # is inside the run-to-run spread): it limits how much one thread may hoard,
-        # not how much the worker can do.
+        # v0.4 measured this cell twice (docs/performance.md §18 and §21). Two
+        # commits per delivery make the worker latency-bound, so concurrency is
+        # its lever: 8 concurrent attempts delivered 158/s, 16 ~280/s, and 32
+        # ~360/s while the relay published in batches of 50. With batches of 100
+        # the relay stops being the ceiling and the same 32 workers deliver ~470/s
+        # at a 450 events/s arrival (§21 measures exactly that, with the broker
+        # queue emptying and hikaricp_connections_pending at 1-5). So 32 is the
+        # shipped default - it is what puts the worker above the relay.
+        # The price: up to 32 concurrent POSTs per endpoint (endpoint.max_concurrency
+        # is the cap for a slow or fragile receiver; see the README config table).
+        # 8 as the floor avoided Spring's 2 -> max ramp, which wasted the first ~30 s
+        # of every run. Prefetch made no difference at any level measured (8 vs 32
+        # is inside the run-to-run spread).
         prefetch: ${MQ_PREFETCH:8}
-        concurrency: ${MQ_CONCURRENCY:8}
-        max-concurrency: ${MQ_MAX_CONCURRENCY:16}
+        concurrency: ${MQ_CONCURRENCY:32}
+        max-concurrency: ${MQ_MAX_CONCURRENCY:32}
         default-requeue-rejected: false
   data:
     redis:
@@ -101,7 +111,14 @@ hookflow:
     ttl-seconds: 60
     sweep-interval-ms: 15000
   relay:
-    batch-size: 50
+    # One confirm window + one UPDATE per batch. v0.4 measured the knob
+    # (docs/performance.md §22): at a 450 events/s arrival, 50 publishes ~360/s
+    # and the outbox grows, 100 keeps up (~470/s), 200 adds nothing because the
+    # arrival rate is then the supply; at 900 events/s 50/100/200 publish
+    # 337/449/731/s. 100 is the smallest measured size that keeps up at the target
+    # arrival rate. Larger batches also widen the duplicate window after a crash
+    # (ADR-0014), so 200 is a catch-up knob, not the default.
+    batch-size: 100
     max-publish-attempts: 10
     interval-ms: 300
     # How long a PUBLISHING row may stay ambiguous before it is re-published.

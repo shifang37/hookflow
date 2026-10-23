@@ -69,6 +69,8 @@ v0.4 的 B0 再基线（[performance.md §15](../performance.md)）测出：这�
   `attemptNo` 栅栏，重复消息会被 `duplicate_skipped` 丢掉）——这条链路依赖 worker 的幂等，不是依赖 relay 的原子性。
 - **batch 大小成为新的旋钮**：`hookflow.relay.batch-size` 现在是"一次 confirm 窗口的条数"，不再只是
   "一次 claim 的条数"。太大则单批的锁持有时间与重复窗口变大，太小则回到每行一次往返。默认 50 未重新调参。
+  **（v0.4 B8 量了：450 到达率下 50 是 357–368/s、100 是 472/s、200 没有进一步收益；900 下 50/100/200
+  发布 337/449/731/s。默认已改为 100，见 [performance.md §22](../performance.md)。）**
 - **它揭穿了一个测试的隐含前提**：`FairnessIT` 原来用 50 ms 的接收方、逐条灌 1 500 条洪水，
   靠"relay 只有 41/s、比 ingest 还慢"来制造排队；relay 变快之后队列不再堆积，受害者只等了 158 ms（测试失败）。
   把接收方调到 200 ms 也只是撑了一阵：B5 把 worker 并发翻倍之后，消费速度又超过了逐条灌入的速度，
