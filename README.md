@@ -464,6 +464,9 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
 | v0.4（可选） | 传输层 SPI + Kafka 第二实现（同一套契约测试）、Java SDK、令牌桶限流 | 计划中 |
 
+**后续工作与优化计划**（含缺口清单、验收标准、预估工作量、环境坑汇总）：[docs/v0.4-plan.md](docs/v0.4-plan.md)。
+这份文档是给「下一个接手的人」看的，能独立读——包含当前基线、P1/P2/P3 任务、以及明确不做什么。
+
 ---
 
 ## 目录结构
