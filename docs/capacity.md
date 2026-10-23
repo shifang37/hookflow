@@ -99,7 +99,7 @@ TPS_max = min(
 
 | 现象（一眼能看出来） | 咬合的约束 | 先加谁 | 边际收益（实测） |
 |---|---|---|---|
-| `messages_ready` 持续上涨 + `unacked` 钉在 `concurrency × prefetch` | **E worker** | 调 `MQ_CONCURRENCY` / `MQ_MAX_CONCURRENCY`（**prefetch 无关，别调**），池跟着加；再往上要合并 claim+settle 两次提交 | 8→16 = 158 → 273/s（+73%）；16 并发 + 池 32 = 296/s；32 并发无收益（relay 先满）；新默认（8→16）实测整次 264/s（[§18](performance.md#18-worker-那一格并发是唯一的旋钮prefetch-不是)） |
+| `messages_ready` 持续上涨 + `unacked` 钉在 `concurrency × prefetch` | **E worker** | 调 `MQ_CONCURRENCY` / `MQ_MAX_CONCURRENCY`（**prefetch 无关，别调**），池跟着加 | 8→16 = 158 → 273/s（+73%）；16 并发 + 池 32 = 296/s；32 并发 + 池 32 = ≥361/s（此时 relay 先满）；新默认（8→16）实测整次 264/s（[§18](performance.md#18-worker-那一格并发是唯一的旋钮prefetch-不是)）。**不要试图用"批量 settle"换吞吐**：实测提交 −36%、吞吐 −25%（[§20](performance.md#20-worker-的-settle-批量提交一次可复现的负结果)） |
 | `hookflow_outbox_publish_rejected_total > 0` | 队列上限（护栏，不是约束） | 不是加机器：说明 worker 追不上 relay，积压回 MySQL 是**设计行为** | B4 压测中实测 175/s 的 nack，行全部回到 NEW |
 | outbox 积压涨而 broker 队列空 | **D relay** | 批量发布（B4，已做）；再往上要动"每批两次提交" | 41 → 400–466/s（10.7×） |
 | `hikaricp_connections_pending > 0` | **B 连接** | `DB_POOL_SIZE`（16 并发时确实会到 3）；若同时是单条入口，先改成批量入口（提交数 1/20） | 单条入口实测 pending 36–42、开环 p50 7.7 s；16 并发 + 池 16 时 pending 3，池 32 后 0 且 +8% |
@@ -124,6 +124,7 @@ TPS_max = min(
 | ~~ingest 成本主要是提交 fsync~~ | v0.3 的假设 | 语句级摘要 | **已证伪**（[§15.4](performance.md#154-新瓶颈是-hookflow_outbox_published_total每行-24-ms-花在两处)）：批量入口下 ingest 只占模型里的极小项 |
 | ~~relay 不是约束~~ | v0.3 的假设 | 对比 `hookflow_outbox_published_total` 与 worker 完成速率 | **已证伪**：41 events/s，是 B0 时最紧的一项 |
 | ~~worker 不是约束~~ | B0 时的观察（worker 闲置） | 同上 | **已证伪（B4 之后）**：它是现在最紧的一项，8 并发 158/s、16 并发 273–296/s |
+| ~~worker 的 settle 批量提交能再抬一倍~~ | §19 的推理：2 次提交 → 1 + 1/N | 同机对照一次 | **已证伪**（[§20](performance.md#20-worker-的-settle-批量提交一次可复现的负结果)）：提交 −36%、吞吐 −25%，已回退。固定并发下 worker 是延迟受限的 |
 | ~~prefetch 越大 worker 越快~~ | 直觉 / 消息队列常见建议 | 并发固定、prefetch 8 vs 32 | **已证伪**（[§18](performance.md#18-worker-那一格并发是唯一的旋钮prefetch-不是)）：148 vs 158、278 vs 273，都在噪声内 |
 | worker 并发可以一直线性加到 32 | 8→16 是 1.73× | 32 并发 + 池 32 | **部分证伪**：32 并发时 relay 先满（队列峰值 0），worker 只测到下界 ≥361/s |
 | "每批一次提交"的固定成本可以忽略 | relay 的 440/s 上限由 claim + markPublished 两次提交构成 | 压测时看 `statements.txt` 的 `COMMIT` 分布 | 未拆开测；§16.2 只给了量级 |
@@ -138,8 +139,8 @@ TPS_max = min(
 ## 6. 一句话
 
 **持续吞吐从 41 events/s 走到 264/s，用了两步：B4 把 relay 的"每行一次 confirm + 一次 UPDATE 提交"
-批量化（41 → 440/s），B5 把 worker 并发从 8 提到 16（158 → 283/s）。现在最紧的是 worker 的"每次投递两次提交"，
-其次是 relay 的"每批两次提交"——两者是同一件事，合并提交次数就是下一刀。**
+批量化（41 → 440/s），B5 把 worker 并发从 8 提到 16（158 → 283/s）。现在最紧的是 worker，
+它的杠杆是**并发**（不是提交次数——那个批量 settle 的尝试实测更慢，见 §20）。**
 4C8G 同机部署估计 150–250 events/s（模型）；扩容顺序由指标决定，最常见的错误是
 ① 在 worker 已经咬合时去加 api 实例，② 把"入口接受速率"当成"平台吞吐"，
-③ 在没有确认"这一格还在瓶颈上"的时候调参数（比如把 prefetch 调大）。
+③ 在没有确认"这一格还在瓶颈上"的时候调参数（prefetch、批量 settle 都试过，都无效）。
