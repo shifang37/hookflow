@@ -184,6 +184,14 @@ export const api = {
   resumeEndpoint: (endpointId: number) =>
     request<Endpoint>('tenant', { method: 'POST', url: `/v1/endpoints/${endpointId}/resume` }),
 
+  /**
+   * Soft-deletes: queued deliveries become CANCELED, the endpoint disappears from every
+   * read and its URL can be registered again. Answers 204 with no body, and 404 if it is
+   * already gone.
+   */
+  deleteEndpoint: (endpointId: number) =>
+    request<void>('tenant', { method: 'DELETE', url: `/v1/endpoints/${endpointId}` }),
+
   // ----------------------------------------------------------------- admin domain
 
   listTenants: (query: TenantQuery = {}) =>

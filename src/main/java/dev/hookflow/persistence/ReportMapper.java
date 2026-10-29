@@ -211,6 +211,15 @@ public interface ReportMapper {
     Double avgSettledLatencyMicros(@Param("tenantId") Long tenantId,
                                    @Param("sinceHours") Integer sinceHours);
 
+    /**
+     * The endpoint count excludes soft-deleted rows: the console's tenant table is a count of
+     * live callback targets, not of rows that ever existed.
+     *
+     * <p>Written {@code != 'DELETED'} rather than {@code <> 'DELETED'} because the annotation
+     * below is an XML {@code <script>}: {@code <>} would be parsed as an empty element and
+     * the mapper would fail to build. The plain (non-script) queries in this file can use
+     * {@code <>}.
+     */
     @Select("""
             <script>
             SELECT t.id            AS tenantId,
@@ -220,7 +229,8 @@ public interface ReportMapper {
                    t.max_in_flight AS maxInFlight,
                    t.weight        AS weight,
                    t.created_at    AS createdAt,
-                   (SELECT COUNT(*) FROM endpoint ep WHERE ep.tenant_id = t.id) AS endpointCount,
+                   (SELECT COUNT(*) FROM endpoint ep
+                     WHERE ep.tenant_id = t.id AND ep.status != 'DELETED')      AS endpointCount,
                    (SELECT COUNT(*) FROM api_key k
                      WHERE k.tenant_id = t.id AND k.status = 'ACTIVE')         AS activeKeyCount
               FROM tenant t
@@ -252,7 +262,8 @@ public interface ReportMapper {
                    t.max_in_flight AS maxInFlight,
                    t.weight        AS weight,
                    t.created_at    AS createdAt,
-                   (SELECT COUNT(*) FROM endpoint ep WHERE ep.tenant_id = t.id) AS endpointCount,
+                   (SELECT COUNT(*) FROM endpoint ep
+                     WHERE ep.tenant_id = t.id AND ep.status != 'DELETED')      AS endpointCount,
                    (SELECT COUNT(*) FROM api_key k
                      WHERE k.tenant_id = t.id AND k.status = 'ACTIVE')         AS activeKeyCount
               FROM tenant t

@@ -515,8 +515,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 
 - 单 region、单 MySQL 主库，没有分片
 - 没有 SDK（Java / Python）
-- 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 管理、监控，
-  但 **Endpoint 删除、事件详情、批量重放**还缺——剩余清单见 [docs/next-steps.md](docs/next-steps.md)
+- 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 的增删改查（含软删除）、监控，
+  但 **事件详情、批量重放**还缺——剩余清单见 [docs/next-steps.md](docs/next-steps.md)
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）

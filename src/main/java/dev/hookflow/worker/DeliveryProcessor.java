@@ -118,10 +118,15 @@ public class DeliveryProcessor {
             return true;
         }
         if (!endpoint.isActive()) {
+            // The endpoint was paused or deleted after this message was published. Which one
+            // matters to the reader: "endpoint paused" on a delivery whose endpoint no longer
+            // exists sends an operator looking for a resume that cannot happen.
+            boolean deleted = endpoint.isDeleted();
             transactionTemplate.executeWithoutResult(status ->
                     deliveryMapper.markCanceled(delivery.id(), leaseToken));
             attemptMapper.finish(delivery.id(), message.attemptNo(), DeliveryAttempt.FAILED,
-                    null, "endpoint paused", "ENDPOINT_PAUSED", 0);
+                    null, deleted ? "endpoint deleted" : "endpoint paused",
+                    deleted ? "ENDPOINT_DELETED" : "ENDPOINT_PAUSED", 0);
             return true;
         }
 

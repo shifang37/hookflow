@@ -35,10 +35,22 @@ public interface EndpointMapper {
             """)
     List<dev.hookflow.domain.fairness.EndpointCap> listConcurrencyCaps();
 
-    @Select("SELECT * FROM endpoint WHERE id = #{id} AND tenant_id = #{tenantId}")
+    /**
+     * Every reader below excludes {@code DELETED}. That predicate is not decoration: a
+     * soft-deleted row still has its URL and (via the generated {@code url_key}) no longer
+     * holds the unique key, so a lookup that forgot the filter could hand back the tombstone
+     * instead of the endpoint the caller just created.
+     */
+    @Select("""
+            SELECT * FROM endpoint
+             WHERE id = #{id} AND tenant_id = #{tenantId} AND status <> 'DELETED'
+            """)
     Optional<Endpoint> findByIdAndTenant(@Param("id") long id, @Param("tenantId") long tenantId);
 
-    @Select("SELECT * FROM endpoint WHERE tenant_id = #{tenantId} AND url = #{url}")
+    @Select("""
+            SELECT * FROM endpoint
+             WHERE tenant_id = #{tenantId} AND url = #{url} AND status <> 'DELETED'
+            """)
     Optional<Endpoint> findByTenantAndUrl(@Param("tenantId") long tenantId, @Param("url") String url);
 
     /** Unscoped lookup for the delivery worker, which already holds a trusted endpoint id. */
@@ -47,7 +59,7 @@ public interface EndpointMapper {
 
     @Select("""
             SELECT * FROM endpoint
-             WHERE tenant_id = #{tenantId}
+             WHERE tenant_id = #{tenantId} AND status <> 'DELETED'
              ORDER BY id DESC
              LIMIT #{limit} OFFSET #{offset}
             """)
@@ -55,15 +67,28 @@ public interface EndpointMapper {
                                 @Param("limit") int limit,
                                 @Param("offset") int offset);
 
-    @Select("SELECT COUNT(*) FROM endpoint WHERE tenant_id = #{tenantId}")
+    @Select("SELECT COUNT(*) FROM endpoint WHERE tenant_id = #{tenantId} AND status <> 'DELETED'")
     long countByTenant(@Param("tenantId") long tenantId);
 
     /** All active endpoints of a tenant; the fan-out step filters by event type in memory. */
     @Select("SELECT * FROM endpoint WHERE tenant_id = #{tenantId} AND status = 'ACTIVE'")
     List<Endpoint> listActiveByTenant(@Param("tenantId") long tenantId);
 
-    @Update("UPDATE endpoint SET status = #{status} WHERE id = #{id} AND tenant_id = #{tenantId}")
+    @Update("""
+            UPDATE endpoint SET status = #{status}
+             WHERE id = #{id} AND tenant_id = #{tenantId} AND status <> 'DELETED'
+            """)
     int updateStatus(@Param("id") long id,
                      @Param("tenantId") long tenantId,
                      @Param("status") String status);
+
+    /**
+     * The soft-delete itself: a one-way transition guarded so a concurrent delete (or a
+     * pause racing a delete) cannot resurrect the row.
+     */
+    @Update("""
+            UPDATE endpoint SET status = 'DELETED'
+             WHERE id = #{id} AND tenant_id = #{tenantId} AND status <> 'DELETED'
+            """)
+    int markDeleted(@Param("id") long id, @Param("tenantId") long tenantId);
 }

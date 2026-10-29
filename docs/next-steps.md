@@ -22,9 +22,9 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **154 个通过** | `./mvnw -o test` |
-| 后端集成测试 | **58 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **60 个通过**，32.3s | `cd frontend && npm test` |
+| 后端单测 | **158 个通过** | `./mvnw -o test` |
+| 后端集成测试 | **63 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
+| 前端单测 | **62 个通过**，~32s | `cd frontend && npm test` |
 | 前端覆盖率 | 语句 83.75% / 分支 82.35% / 函数 49.71%，约 69s | `npm run test:coverage` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
@@ -69,15 +69,36 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 按「值得先做」排序。每条都写了要改哪里、验收标准、以及已知的坑。
 
-### A. Endpoint 删除（后端 + 前端）
+### A. Endpoint 删除（后端 + 前端）—— 已完成
 
-**这是路线图 P0「所有 CRUD 通过 UI 完成」最后缺的一块**，而且缺在**后端**：现在只有 pause/resume，没有 DELETE。
+`DELETE /v1/endpoints/{id}` → `204`，软删除（`status = 'DELETED'`，行保留给投递历史）。落地时和原计划的两点差异：
 
-- 后端：加软删除。可复用 `deliveryMapper.cancelPendingForEndpoint(endpointId, tenantId)`（pause 已经在用）。
-  注意 `endpoint.status` 有 CHECK 约束 `ck_endpoint_status IN ('ACTIVE','PAUSED')`（V1），要么加 `DELETED`（**需要新的 V5 迁移改约束**），要么加 `deleted_at` 列并让 `listActiveByTenant`（fan-out 用）和列表查询都排除它。
-- 新增 `DELETE /v1/endpoints/{id}`；列表默认不返回已删除。
-- 前端：`EndpointsPage` 行操作加「删除」，Popconfirm 要写清「会取消未投递的投递，不可恢复」。
-- 验收：删除后 `GET /v1/endpoints/{id}` 返回 404；该 endpoint 的 PENDING/RETRY_WAIT 变 CANCELED；已被其它 endpoint 收下的投递不受影响；有 IT 覆盖。
+1. **用 `status='DELETED'`，不用 `deleted_at`**：fan-out 本来就只读 `WHERE status = 'ACTIVE'`，
+   所以 `listActiveByTenant` 一行没改；CHECK 约束改成三值并没有让任何写入路径变松。
+2. **V5 里多改了一个唯一键**，这是原计划没写到的坑：`uk_endpoint_tenant_url (tenant_id, url(191))`
+   是无条件的，软删除之后同一个 URL 再建会撞上一个用户看不见的行。MySQL 没有部分索引，所以
+   V5 加了 STORED 生成列 `url_key`（删除后为 NULL）+ 唯一键 `(tenant_id, url_key)`：唯一性只约束
+   活着的行，URL 在删除后立刻可以重新注册。`V5__endpoint_soft_delete.sql` 顶部有完整取舍。
+
+改动清单：
+
+- `Endpoint.DELETED` / `isDeleted()`；`EndpointMapper` 的 5 个读接口全部加 `status <> 'DELETED'`
+  （漏一个就会把墓碑当新建的行返回），新增 `markDeleted` CAS；`updateStatus` 也带上同样的守卫。
+- `EndpointService.delete`：`retryOnLockConflict`（operation `endpoint.delete`，与 pause 同样的
+  批量 cancel vs claim 死锁）+ `cancelPendingForEndpoint` + 审计行（记录 `cancelledDeliveries`）。
+- `EndpointController.delete` → `204`；`DeliveryProcessor` 对被删 endpoint 的迟到消息记
+  `ENDPOINT_DELETED`，不再和暂停混为一谈。
+- `ReportMapper` 的 `endpointCount` 两处排除 `DELETED`（注意 `<script>` 是 XML，`<>` 要写成 `!=`）。
+- 前端：`api.deleteEndpoint`、`useDeleteEndpoint`（同 pause 三个 invalidate）、`EndpointsPage` 行内
+  「删除」+ Popconfirm（写明会取消 PENDING/RETRY_WAIT、不可恢复、URL 可重新创建）。
+
+验收（都已有测试）：`GET /v1/endpoints/{id}`、`pause`、`resume` 删除后均 404；该 endpoint 的
+PENDING/RETRY_WAIT → CANCELED，另一个 endpoint 的同事件投递不动；重复删除 404；同 URL 可重建；
+fan-out 不再命中。IT 在 `EndpointDeleteIT`（5 个），单测在 `EndpointDeleteTest`（4 个，含并发
+CAS 输了比赛的那条）。
+
+**没做**：路线图草稿里把删除放在 `/v1/admin/endpoints/{id}` —— 实际放在租户域 `/v1/endpoints/{id}`，
+因为 endpoint 属于租户，租户自己删自己的回调地址不需要运营令牌。路线图那一节可以按这个改。
 
 ### B. 事件详情 + 批量重放
 
@@ -262,5 +283,7 @@ ae43506 feat: operator console - admin read API and a React UI
 1. ~~先提交~~ —— 已完成：`ae43506`，工作区干净。
 2. ~~C：前端测试提速~~ —— 已完成：139s → 70.4s（`npm test` 59.8s → 32.3s），见 §4C。
 3. ~~D：拆 `TenantsPage.tsx`~~ —— 已完成，见 §4D。
-4. 下一步挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是路线图 P0 的验收标准，B 补的是日常排查最常用的两个操作。
-5. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。
+4. ~~A：Endpoint 删除~~ —— 已完成（V5 + 5 个 IT + 3 个单测 + 前端删除操作），见 §4A。
+5. **下一步做 B（事件详情 + 批量重放）**：`EventController.getEvent` 还是占位实现（`deliveryCount`
+   恒为 0、不返回 payload），批量重放要新接口。这是日常排查最常用的两个操作，也是路线图 P0 的剩余部分。
+6. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。

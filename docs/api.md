@@ -287,7 +287,7 @@ curl -X POST localhost:8080/v1/endpoints \
 
 ### GET /v1/endpoints?page=0&size=20
 
-`PageResponse<EndpointResponse>`（不含密钥）。
+`PageResponse<EndpointResponse>`（不含密钥，也不含已删除的 endpoint；`total` 用的是同一个口径）。
 
 ### GET /v1/endpoints/{id}
 
@@ -298,6 +298,17 @@ curl -X POST localhost:8080/v1/endpoints \
 ### POST /v1/endpoints/{id}/resume
 
 恢复。**已取消的投递不会复活**——需要重放请针对具体 delivery 操作。
+
+### DELETE /v1/endpoints/{id}
+
+`204`，没有 body。软删除，但对外部世界是删除：
+
+- 该 endpoint 下所有 `PENDING` / `RETRY_WAIT` 的投递立刻变 `CANCELED`；已经在投递中的那一条会跑完并记录结果。删除之后才被 worker 取到的消息同样会取消，错误类记 `ENDPOINT_DELETED`（暂停时是 `ENDPOINT_PAUSED`）。
+- 之后的 `GET /v1/endpoints/{id}`、`pause`、`resume` 一律 `404`；列表、`endpointCount`、fan-out 都不再包含它。再删一次也是 `404`——它已经不存在了，`204` 会暗示还能复原。
+- **投递历史保留**：`delivery.endpoint_id` 是外键，删掉行会让「这个事件当时发给了谁」变成 `MISSING_PARENT`。所以行还在，只是 `status = 'DELETED'`。
+- **URL 立刻可以重新注册**：唯一键 `uk_endpoint_tenant_url` 只约束未删除的行（MySQL 没有部分索引，用 V5 的生成列 `url_key` 实现）。删掉再建同一个地址是正常操作——重建一把密钥、改对尝试上限——不需要先换个 URL。
+
+`status` 因此有了第三个取值 `DELETED`，但它不会出现在任何响应里：拿不到行的接口只会给你 `404`。
 
 ---
 

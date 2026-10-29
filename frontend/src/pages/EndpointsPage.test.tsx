@@ -13,15 +13,17 @@ vi.mock('@/api/queries', async (importOriginal) => {
     useEndpoints: vi.fn(),
     useCreateEndpoint: vi.fn(),
     useSetEndpointStatus: vi.fn(),
+    useDeleteEndpoint: vi.fn(),
   }
 })
 
-import { useCreateEndpoint, useEndpoints, useSetEndpointStatus } from '@/api/queries'
+import { useCreateEndpoint, useDeleteEndpoint, useEndpoints, useSetEndpointStatus } from '@/api/queries'
 import { EndpointsPage } from './EndpointsPage'
 
 const mockedUseEndpoints = vi.mocked(useEndpoints)
 const mockedUseCreate = vi.mocked(useCreateEndpoint)
 const mockedUseStatus = vi.mocked(useSetEndpointStatus)
+const mockedUseDelete = vi.mocked(useDeleteEndpoint)
 
 /** `delay: null` skips userEvent's per-keystroke tick; AntD's Form re-render is the slow part. */
 const typing = () => userEvent.setup({ delay: null })
@@ -70,11 +72,16 @@ describe('EndpointsPage', () => {
     mockedUseEndpoints.mockReset()
     mockedUseCreate.mockReset()
     mockedUseStatus.mockReset()
+    mockedUseDelete.mockReset()
     mockedUseCreate.mockReturnValue(createResult())
     mockedUseStatus.mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
     } as unknown as ReturnType<typeof useSetEndpointStatus>)
+    mockedUseDelete.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    } as unknown as ReturnType<typeof useDeleteEndpoint>)
     useUiStore.setState({ tenantToken: 'hk_test', adminToken: '' })
   })
 
@@ -120,6 +127,38 @@ describe('EndpointsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /恢\s*复/ }))
 
     expect(screen.getByText(/已取消的投递不会复活/)).toBeInTheDocument()
+  })
+
+  it('warns what deleting cancels, and that it cannot be undone', () => {
+    withEndpoints([activeEndpoint])
+
+    renderWithProviders(<EndpointsPage />)
+    // The row button is `删 除`; the confirmation's OK button is `确认删除`, so anchor the
+    // matcher or it would find both.
+    fireEvent.click(screen.getByRole('button', { name: /^删\s*除$/ }))
+
+    expect(screen.getByText('删除这个 Endpoint？')).toBeInTheDocument()
+    expect(
+      screen.getByText(/会取消它下面所有 PENDING \/ RETRY_WAIT 的投递，且无法恢复/),
+    ).toBeInTheDocument()
+  })
+
+  it('deletes only after the operator confirms', () => {
+    const mutate = vi.fn()
+    mockedUseDelete.mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useDeleteEndpoint>)
+    withEndpoints([activeEndpoint])
+
+    renderWithProviders(<EndpointsPage />)
+    fireEvent.click(screen.getByRole('button', { name: /^删\s*除$/ }))
+    expect(mutate).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+
+    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(mutate.mock.calls[0]?.[0]).toBe(activeEndpoint.id)
   })
 
   it('creates an endpoint and then shows the secret exactly once', async () => {

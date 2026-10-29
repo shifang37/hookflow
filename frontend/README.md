@@ -110,6 +110,8 @@ npm run test:coverage
   里显示最近一次错误。
 - **API Key 的撤销是立即生效、不可逆的**：点下去之后用那把 Key 的客户端会在下一个请求
   收到 401。UI 用 Popconfirm 说明了这一点，但没有「宽限期」——后端也没做。
-- **Endpoint 的删除**：后端也没有 DELETE，只有 pause/resume（路线图里的软删除尚未实现）。
+- **Endpoint 的删除是软删除**：行还在数据库里（投递历史要引用它），接口层面则彻底消失——删完
+  `GET /v1/endpoints/{id}` 就是 404，同一个 URL 可以立刻重新创建。UI 的 Popconfirm 写明了会取消
+  哪些投递、以及不可恢复。
 - **重复 URL / 重名租户**：后端现在返回 `409 ALREADY_EXISTS`（见 `docs/api.md`），UI 直接把
   `message` 弹出来即可，不需要额外处理。

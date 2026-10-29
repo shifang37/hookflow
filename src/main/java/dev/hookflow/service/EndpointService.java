@@ -159,4 +159,40 @@ public class EndpointService {
         auditLogMapper.insert(tenantId, "api-key", "endpoint.resume", "endpoint", endpointId, "{}");
         return require(tenantId, endpointId);
     }
+
+    /**
+     * Soft-deletes the endpoint: its queued and retrying deliveries are cancelled, its URL
+     * is released for re-creation, and every id-scoped read starts answering 404.
+     *
+     * <p>Delivery history is deliberately kept — {@code delivery.endpoint_id} is a foreign
+     * key, and "which callback address received this event" must remain answerable after
+     * the endpoint is gone. {@code V5__endpoint_soft_delete.sql} explains how the URL
+     * unique key survives that.
+     *
+     * <p><b>Deadlock is expected here for the same reason as in {@link #pause}</b>: the
+     * cancel is one bulk update against the delivery table while workers claim and settle
+     * rows. The whole transaction is retried by {@link RetryOnLockConflict}, tagged
+     * {@code endpoint.delete}; unlike pause there is no operation that undoes it, so the
+     * retry is the only automatic recovery.
+     */
+    public void delete(long tenantId, long endpointId) {
+        retryOnLockConflict.executeWithoutResult("endpoint.delete",
+                () -> transactionTemplate.executeWithoutResult(
+                        status -> deleteInTransaction(tenantId, endpointId)));
+    }
+
+    private void deleteInTransaction(long tenantId, long endpointId) {
+        Endpoint endpoint = require(tenantId, endpointId);
+        // The CAS, not the read above, decides the race: two operators deleting the same
+        // endpoint must not both get a 204 (and two audit rows) out of one endpoint.
+        if (endpointMapper.markDeleted(endpointId, tenantId) == 0) {
+            throw ApiException.notFound("Endpoint");
+        }
+        // Order matters no more than in pause: both statements are in one transaction, and
+        // an ingest that races them is handled by the worker, which cancels a delivery
+        // whose endpoint is already inactive.
+        int cancelled = deliveryMapper.cancelPendingForEndpoint(endpointId, tenantId);
+        auditLogMapper.insert(tenantId, "api-key", "endpoint.delete", "endpoint", endpointId,
+                "{\"url\":\"" + endpoint.url() + "\",\"cancelledDeliveries\":" + cancelled + "}");
+    }
 }

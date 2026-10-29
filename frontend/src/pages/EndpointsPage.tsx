@@ -21,6 +21,7 @@ import { ApiError } from '@/api/client'
 import {
   POLL_INTERVAL_MS,
   useCreateEndpoint,
+  useDeleteEndpoint,
   useEndpoints,
   useSetEndpointStatus,
   type EndpointQuery,
@@ -70,6 +71,7 @@ export function EndpointsPage() {
   const query = useMemo<EndpointQuery>(() => ({ page, size: PAGE_SIZE }), [page])
   const { data, error, isFetching, refetch } = useEndpoints(query)
   const statusMutation = useSetEndpointStatus()
+  const deleteMutation = useDeleteEndpoint()
 
   const toggleStatus = (endpoint: Endpoint, action: 'pause' | 'resume') => {
     statusMutation.mutate(
@@ -80,6 +82,13 @@ export function EndpointsPage() {
         onError: (cause) => message.error(cause.message),
       },
     )
+  }
+
+  const deleteEndpoint = (endpoint: Endpoint) => {
+    deleteMutation.mutate(endpoint.id, {
+      onSuccess: () => message.success(`已删除 #${endpoint.id}`),
+      onError: (cause) => message.error(cause.message),
+    })
   }
 
   const columns: TableProps<Endpoint>['columns'] = [
@@ -136,35 +145,52 @@ export function EndpointsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 112,
+      width: 188,
       render: (_, endpoint) => {
         const busy =
           statusMutation.isPending && statusMutation.variables?.endpointId === endpoint.id
-        return endpoint.status === 'ACTIVE' ? (
-          <Popconfirm
-            title="暂停这个 Endpoint？"
-            description="会立刻取消它下面所有 PENDING / RETRY_WAIT 的投递；已经在投递中的不受影响。"
-            okText="暂停"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => toggleStatus(endpoint, 'pause')}
-          >
-            <Button size="small" danger loading={busy}>
-              暂停
-            </Button>
-          </Popconfirm>
-        ) : (
-          <Popconfirm
-            title="恢复这个 Endpoint？"
-            description="恢复后只接收新事件；已取消的投递不会复活，需要按条重放。"
-            okText="恢复"
-            cancelText="取消"
-            onConfirm={() => toggleStatus(endpoint, 'resume')}
-          >
-            <Button size="small" type="primary" loading={busy}>
-              恢复
-            </Button>
-          </Popconfirm>
+        const deleting = deleteMutation.isPending && deleteMutation.variables === endpoint.id
+        return (
+          <Space size={4}>
+            {endpoint.status === 'ACTIVE' ? (
+              <Popconfirm
+                title="暂停这个 Endpoint？"
+                description="会立刻取消它下面所有 PENDING / RETRY_WAIT 的投递；已经在投递中的不受影响。"
+                okText="暂停"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => toggleStatus(endpoint, 'pause')}
+              >
+                <Button size="small" danger loading={busy}>
+                  暂停
+                </Button>
+              </Popconfirm>
+            ) : (
+              <Popconfirm
+                title="恢复这个 Endpoint？"
+                description="恢复后只接收新事件；已取消的投递不会复活，需要按条重放。"
+                okText="恢复"
+                cancelText="取消"
+                onConfirm={() => toggleStatus(endpoint, 'resume')}
+              >
+                <Button size="small" type="primary" loading={busy}>
+                  恢复
+                </Button>
+              </Popconfirm>
+            )}
+            <Popconfirm
+              title="删除这个 Endpoint？"
+              description="会取消它下面所有 PENDING / RETRY_WAIT 的投递，且无法恢复。已经在投递中的不受影响；之后可以用同一个地址重新创建。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => deleteEndpoint(endpoint)}
+            >
+              <Button size="small" danger type="text" loading={deleting}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
         )
       },
     },
@@ -174,7 +200,7 @@ export function EndpointsPage() {
     <div>
       <PageTitle
         title="Endpoints"
-        subtitle="客户的回调目标 · 需要租户 API Key（创建/暂停还需要 endpoint:write 权限）"
+        subtitle="客户的回调目标 · 需要租户 API Key（创建/暂停/删除还需要 endpoint:write 权限）"
         actions={
           <Space>
             <LiveBadge intervalMs={POLL_INTERVAL_MS.endpoints} fetching={isFetching} />

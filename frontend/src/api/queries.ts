@@ -94,6 +94,8 @@ export function useCreateEndpoint() {
     mutationFn: (body: CreateEndpointRequest) => api.createEndpoint(body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['endpoints'] })
+      // The tenant table shows `endpointCount`; without this it would lag one poll behind.
+      void queryClient.invalidateQueries({ queryKey: ['tenants'] })
     },
   })
 }
@@ -115,6 +117,25 @@ export function useSetEndpointStatus() {
       void queryClient.invalidateQueries({ queryKey: ['endpoints'] })
       void queryClient.invalidateQueries({ queryKey: ['deliveries'] })
       void queryClient.invalidateQueries({ queryKey: ['events'] })
+    },
+  })
+}
+
+/**
+ * Deletion shares pause's consequences (queued deliveries are cancelled, the delivery and
+ * event lists therefore change) and adds two of its own: the row leaves the endpoint list,
+ * and the tenant's `endpointCount` goes down. The confirmation lives in the page rather
+ * than here — a mutation hook cannot ask, and this one cannot be undone.
+ */
+export function useDeleteEndpoint() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (endpointId: number) => api.deleteEndpoint(endpointId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['endpoints'] })
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] })
+      void queryClient.invalidateQueries({ queryKey: ['events'] })
+      void queryClient.invalidateQueries({ queryKey: ['tenants'] })
     },
   })
 }

@@ -26,6 +26,15 @@ public record Endpoint(
 
     public static final String ACTIVE = "ACTIVE";
     public static final String PAUSED = "PAUSED";
+
+    /**
+     * Soft-deleted. The row stays because {@code delivery.endpoint_id} references it;
+     * every API path that takes an endpoint id treats it as missing, and fan-out never
+     * returns it. The generated {@code url_key} column releases the URL for re-creation
+     * — see {@code V5__endpoint_soft_delete.sql}.
+     */
+    public static final String DELETED = "DELETED";
+
     public static final String WILDCARD = "*";
 
     /** {@code 0} means "no endpoint-level cap; the tenant budget is the only fence". */
@@ -35,6 +44,10 @@ public record Endpoint(
 
     public boolean isActive() {
         return ACTIVE.equals(status);
+    }
+
+    public boolean isDeleted() {
+        return DELETED.equals(status);
     }
 
     /** Returns true when this endpoint should receive the given event type. */
