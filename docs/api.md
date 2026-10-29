@@ -389,6 +389,30 @@ curl "localhost:8080/v1/events?eventType=order.paid&page=0&size=20" \
 
 ### GET /v1/events/{id}
 
+一个事件的完整内容：它的 **payload（原始 JSON 文本）** 和它扇出的所有投递。
+
+```json
+{
+  "eventId": 12,
+  "eventType": "order.paid",
+  "payload": "{\"amount\": 42}",
+  "createdAt": "2026-10-29T08:31:02.114",
+  "deliveryCount": 2,
+  "deliveries": [
+    {"id": 100, "eventId": 12, "endpointId": 3, "status": "DEAD", "attemptCount": 8,
+     "maxAttempts": 8, "nextAttemptAt": null, "lastErrorClass": "SERVER_5XX",
+     "lastStatusCode": 500, "createdAt": "...", "updatedAt": "..."}
+  ]
+}
+```
+
+`payload` 是**字符串**，不是 JSON 对象：平台从头到尾不重新序列化客户数据（见 [delivery-semantics.md](delivery-semantics.md)），
+所以这里给的就是库里的那份文本（MySQL 的 JSON 列会规范化空白与键序，但内容不会被 API 重编码）。
+客户端要格式化就自己 `JSON.parse`；解析失败时按原文展示，不要"修正"。
+
+`deliveryCount` 是真实总数，`deliveries` 最多 200 条（一次扇出到几百个 endpoint 时响应仍然有界）；
+两者不相等就说明列表被截断了。
+
 ---
 
 ## 批量提交（v0.4）
@@ -501,6 +525,34 @@ curl -X POST localhost:8080/v1/events/batch \
 ```json
 {"code":40903,"error":"ILLEGAL_TRANSITION","message":"Only DEAD deliveries can be replayed (current: SUCCEEDED)"}
 ```
+
+### POST /v1/deliveries/replay
+
+批量重放，最多 100 条。**逐条独立事务**：一条失败不会回滚其它条，所以这是**部分成功**接口。
+
+```bash
+curl -X POST localhost:8080/v1/deliveries/replay \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"deliveryIds":[3,4,99]}'
+```
+
+```json
+{
+  "replayed": 2,
+  "rejected": 1,
+  "results": [
+    {"deliveryId": 3, "replayed": true, "status": "PENDING", "code": null, "message": null},
+    {"deliveryId": 4, "replayed": true, "status": "PENDING", "code": null, "message": null},
+    {"deliveryId": 99, "replayed": false, "status": null, "code": 40400, "message": "Delivery not found"}
+  ]
+}
+```
+
+- **HTTP 永远 200**（只要请求本身合法）：结果在 `results` 里，`replayed + rejected = results.length`。
+  4xx 会丢掉"哪些成功了"这个答案；207 则要每个调用方为一个少见的码写分支。
+- 逐条规则与单条重放相同：只接受 `DEAD`（否则 `409 ILLEGAL_TRANSITION`），不存在或不属于该租户是 `404 NOT_FOUND`。
+- `deliveryIds` 为空、超过 100、含 `null` 或**有重复** → `400`。重复不是"顺手去重"：同一条在第一次重放后就变成
+  `PENDING`，第二次的语义只能是"被拒绝"，与其给一个含混的结果，不如让客户端先改对。
 
 ---
 

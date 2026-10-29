@@ -1,5 +1,8 @@
 package dev.hookflow.it;
 
+import dev.hookflow.api.EventController;
+import dev.hookflow.api.dto.Dtos.DeliveryResponse;
+import dev.hookflow.api.dto.Dtos.EventDetailResponse;
 import dev.hookflow.api.dto.Dtos.EventSummaryResponse;
 import dev.hookflow.api.dto.Dtos.LatencyBucketResponse;
 import dev.hookflow.api.dto.Dtos.LatencyResponse;
@@ -8,6 +11,7 @@ import dev.hookflow.api.dto.Dtos.TenantResponse;
 import dev.hookflow.api.dto.Dtos.TenantStatsResponse;
 import dev.hookflow.api.dto.Dtos.TimeseriesPointResponse;
 import dev.hookflow.api.dto.Dtos.TimeseriesResponse;
+import dev.hookflow.common.auth.ApiKeyPrincipal;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.common.web.PageResponse;
@@ -56,6 +60,8 @@ class ReadApiIT extends AbstractIntegrationTest {
     private TenantService tenantService;
     @Autowired
     private DeliveryService deliveryService;
+    @Autowired
+    private EventController eventController;
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
@@ -373,6 +379,43 @@ class ReadApiIT extends AbstractIntegrationTest {
         });
     }
 
+    @Test
+    @DisplayName("event detail: the stored payload plus the deliveries the event fanned out to")
+    void eventDetailReturnsPayloadAndDeliveries() {
+        withPrincipal(tenantId, () -> {
+            EventDetailResponse refunded = eventController.getEvent(refundedEventId);
+
+            assertThat(refunded.eventType()).isEqualTo("order.refunded");
+            // The API hands back exactly what the database holds (MySQL canonicalises JSON
+            // on write, and the platform never re-encodes it on read); the test asserts the
+            // round trip rather than a whitespace-sensitive literal.
+            assertThat(refunded.payload()).isEqualTo(jdbcTemplate.queryForObject(
+                    "SELECT payload FROM event WHERE id = ?", String.class, refundedEventId));
+            assertThat(refunded.payload()).contains("amount");
+            assertThat(refunded.deliveryCount()).isEqualTo(2);
+            assertThat(refunded.deliveries())
+                    .extracting(DeliveryResponse::endpointId)
+                    .containsExactlyInAnyOrder(allTypesEndpointId, refundsOnlyEndpointId);
+            assertThat(refunded.deliveries())
+                    .extracting(DeliveryResponse::eventId)
+                    .containsOnly(refundedEventId);
+        });
+    }
+
+    @Test
+    @DisplayName("event detail is tenant-scoped: another tenant's event id is a 404")
+    void eventDetailIsTenantScoped() {
+        String otherName = "read-it-other-" + UUID.randomUUID();
+        tenantMapper.insert(otherName, 0);
+        long otherTenantId = tenantMapper.findByName(otherName).orElseThrow().id();
+
+        assertThatThrownBy(() -> withPrincipal(otherTenantId,
+                () -> eventController.getEvent(paidEventId)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(thrown -> assertThat(((ApiException) thrown).errorCode())
+                        .isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
     // ----------------------------------------------------------------- indexes
 
     @Test
@@ -391,5 +434,20 @@ class ReadApiIT extends AbstractIntegrationTest {
                 """, String.class);
 
         assertThat(columns).containsExactly("updated_at", "status");
+    }
+
+    /**
+     * The console endpoints read the tenant from the request's principal; these tests call
+     * the controller directly, so the ThreadLocal is the only thing that has to be staged.
+     * The auth filter is covered by its own tests and by every HTTP-level drill.
+     */
+    private static void withPrincipal(long tenantId, Runnable body) {
+        ApiKeyPrincipal.Context.set(
+                new ApiKeyPrincipal(tenantId, "it-key", "event:write,delivery:read"));
+        try {
+            body.run();
+        } finally {
+            ApiKeyPrincipal.Context.clear();
+        }
     }
 }

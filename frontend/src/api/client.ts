@@ -2,11 +2,13 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { getAdminToken, getTenantToken } from './auth'
 import type {
   ApiKey,
+  BatchReplay,
   CreateEndpointRequest,
   Delivery,
   DeliveryStatus,
   Endpoint,
   EndpointCreated,
+  EventDetail,
   Interval,
   IssuedKey,
   Latency,
@@ -170,6 +172,21 @@ export const api = {
 
   replayDelivery: (deliveryId: number) =>
     request<Delivery>('tenant', { method: 'POST', url: `/v1/deliveries/${deliveryId}/replay` }),
+
+  /**
+   * Batch replay. Answers 200 even when some ids are rejected: the per-id results are the
+   * contract, and a thrown error would lose the ids that did succeed.
+   */
+  replayDeliveries: (deliveryIds: number[]) =>
+    request<BatchReplay>('tenant', {
+      method: 'POST',
+      url: '/v1/deliveries/replay',
+      data: { deliveryIds },
+    }),
+
+  /** One event with its raw payload and the deliveries it fanned out to. */
+  getEvent: (eventId: number) =>
+    request<EventDetail>('tenant', { method: 'GET', url: `/v1/events/${eventId}` }),
 
   listEndpoints: (query: EndpointQuery = {}) =>
     request<PageResponse<Endpoint>>('tenant', { method: 'GET', url: '/v1/endpoints', params: query }),

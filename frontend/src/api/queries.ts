@@ -43,6 +43,7 @@ export const POLL_INTERVAL_MS = {
 
 export const queryKeys = {
   events: (query: EventQuery) => ['events', query] as const,
+  eventDetail: (eventId: number) => ['event-detail', eventId] as const,
   deliveries: (query: DeliveryQuery) => ['deliveries', query] as const,
   endpoints: (query: EndpointQuery) => ['endpoints', query] as const,
   tenants: (query: TenantQuery) => ['tenants', query] as const,
@@ -77,6 +78,29 @@ export function useDeliveries(query: DeliveryQuery) {
     refetchInterval: POLL_INTERVAL_MS.deliveries,
     placeholderData: keepPreviousData,
   })
+}
+
+/**
+ * One event's payload and deliveries, for the event drawer.
+ *
+ * No polling: the payload is immutable, and the delivery list inside it changes only when
+ * something is replayed — which invalidates this key anyway. Polling it would redraw a
+ * pretty-printed payload every two seconds for no new information.
+ */
+export function useEventDetail(eventId: number | undefined) {
+  return useQuery({
+    queryKey: queryKeys.eventDetail(eventId ?? -1),
+    queryFn: () => api.getEvent(eventId as number),
+    enabled: eventId !== undefined,
+  })
+}
+
+/**
+ * Non-hook fetch, because the event table's batch action has to resolve delivery ids before
+ * it knows what to replay: select events → fetch their details → replay the DEAD deliveries.
+ */
+export function fetchEventDetail(eventId: number) {
+  return api.getEvent(eventId)
 }
 
 export function useEndpoints(query: EndpointQuery) {
@@ -250,9 +274,9 @@ export function useLatency(query: LatencyQuery) {
 }
 
 /**
- * Replay is the only write in the console, and it is a one-shot action rather than
- * something to poll, so it stays a mutation that invalidates the two lists it can
- * change (the delivery it moved, and the event whose counters it moved).
+ * Replay is a one-shot action rather than something to poll, so it stays a mutation that
+ * invalidates the three views it can change: the delivery it moved, the event counters it
+ * moved, and an open event drawer showing that delivery.
  */
 export function useReplayDelivery() {
   const queryClient = useQueryClient()
@@ -261,6 +285,24 @@ export function useReplayDelivery() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['deliveries'] })
       void queryClient.invalidateQueries({ queryKey: ['events'] })
+      void queryClient.invalidateQueries({ queryKey: ['event-detail'] })
+    },
+  })
+}
+
+/**
+ * Batch replay. Same invalidations as the single-row one, because the same rows move; the
+ * caller gets a partial result and is responsible for telling the operator which ids were
+ * rejected and why.
+ */
+export function useBatchReplayDeliveries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (deliveryIds: number[]) => api.replayDeliveries(deliveryIds),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] })
+      void queryClient.invalidateQueries({ queryKey: ['events'] })
+      void queryClient.invalidateQueries({ queryKey: ['event-detail'] })
     },
   })
 }

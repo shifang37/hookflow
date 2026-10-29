@@ -9,8 +9,10 @@ import dev.hookflow.common.auth.ApiKeyPrincipal;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.common.web.PageResponse;
+import dev.hookflow.domain.event.Event;
 import dev.hookflow.domain.tenant.Tenant;
 import dev.hookflow.ratelimit.TenantRateLimiter;
+import dev.hookflow.service.DeliveryService;
 import dev.hookflow.service.EventIngestService;
 import dev.hookflow.service.ReportService;
 import dev.hookflow.service.TenantService;
@@ -56,7 +58,18 @@ public class EventController {
      */
     public static final int MAX_BATCH_EVENTS = 500;
 
+    /**
+     * Upper bound of the deliveries embedded in one event detail response.
+     *
+     * <p>An event fans out to one delivery per matching endpoint, so this is really "how many
+     * endpoints an event can be delivered to before the detail view stops showing all of
+     * them". 200 leaves the response a few hundred KB at most, and {@code deliveryCount}
+     * tells a client when the list is truncated.
+     */
+    public static final int DETAIL_DELIVERY_LIMIT = 200;
+
     private final EventIngestService ingestService;
+    private final DeliveryService deliveryService;
     private final TenantService tenantService;
     private final TenantRateLimiter rateLimiter;
     private final dev.hookflow.backpressure.BacklogGate backlogGate;
@@ -64,12 +77,14 @@ public class EventController {
     private final ReportService reportService;
 
     public EventController(EventIngestService ingestService,
+                           DeliveryService deliveryService,
                            TenantService tenantService,
                            TenantRateLimiter rateLimiter,
                            dev.hookflow.backpressure.BacklogGate backlogGate,
                            ObjectMapper objectMapper,
                            ReportService reportService) {
         this.ingestService = ingestService;
+        this.deliveryService = deliveryService;
         this.tenantService = tenantService;
         this.rateLimiter = rateLimiter;
         this.backlogGate = backlogGate;
@@ -145,11 +160,26 @@ public class EventController {
                 .body(body);
     }
 
+    /**
+     * One event with the payload it was accepted with, and the deliveries it fanned out to.
+     *
+     * <p>The payload is returned as the raw JSON string the platform stored, not as a parsed
+     * object — see {@link dev.hookflow.api.dto.Dtos.EventDetailResponse#payload()}. The
+     * delivery list is capped at {@value #DETAIL_DELIVERY_LIMIT}; {@code deliveryCount} is the
+     * true total so a client can tell whether it is seeing all of them.
+     */
     @GetMapping("/{eventId}")
-    @Operation(summary = "Fetch one event")
-    public dev.hookflow.api.dto.Dtos.EventResponse getEvent(@PathVariable long eventId) {
-        var event = ingestService.requireEvent(ApiKeyPrincipal.Context.requireTenantId(), eventId);
-        return new dev.hookflow.api.dto.Dtos.EventResponse(event.id(), 0, false);
+    @Operation(summary = "Fetch one event with its payload and delivery list")
+    public dev.hookflow.api.dto.Dtos.EventDetailResponse getEvent(@PathVariable long eventId) {
+        long tenantId = ApiKeyPrincipal.Context.requireTenantId();
+        Event event = ingestService.requireEvent(tenantId, eventId);
+        DeliveryService.Page page = deliveryService.list(tenantId, eventId, null, null, null, null,
+                0, DETAIL_DELIVERY_LIMIT);
+        List<dev.hookflow.api.dto.Dtos.DeliveryResponse> deliveries = page.items().stream()
+                .map(DeliveryController::toResponse)
+                .toList();
+        return new dev.hookflow.api.dto.Dtos.EventDetailResponse(event.id(), event.eventType(),
+                event.payload(), event.createdAt(), page.total(), deliveries);
     }
 
     /**

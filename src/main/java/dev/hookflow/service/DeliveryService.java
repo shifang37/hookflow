@@ -10,30 +10,49 @@ import dev.hookflow.persistence.DeliveryAttemptMapper;
 import dev.hookflow.persistence.DeliveryMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 @Service
 public class DeliveryService {
 
+    /** Upper bound for one batch replay: the console's page size, and one operator selection. */
+    public static final int MAX_BATCH_REPLAY = 100;
+
     private final DeliveryMapper deliveryMapper;
     private final DeliveryAttemptMapper attemptMapper;
     private final AuditLogMapper auditLogMapper;
     private final OutboxWriter outboxWriter;
+    private final TransactionTemplate transactionTemplate;
 
     public DeliveryService(DeliveryMapper deliveryMapper,
                            DeliveryAttemptMapper attemptMapper,
                            AuditLogMapper auditLogMapper,
-                           OutboxWriter outboxWriter) {
+                           OutboxWriter outboxWriter,
+                           TransactionTemplate transactionTemplate) {
         this.deliveryMapper = deliveryMapper;
         this.attemptMapper = attemptMapper;
         this.auditLogMapper = auditLogMapper;
         this.outboxWriter = outboxWriter;
+        this.transactionTemplate = transactionTemplate;
     }
 
     public record Page(List<Delivery> items, long total) {
+    }
+
+    /**
+     * One line of a batch replay. Exactly one of {@code status} (replayed) and
+     * {@code rejection} (not replayed) is set.
+     */
+    public record ReplayOutcome(long deliveryId, String status, ErrorCode rejection, String message) {
+
+        public boolean replayed() {
+            return rejection == null;
+        }
     }
 
     /**
@@ -90,6 +109,10 @@ public class DeliveryService {
      */
     @Transactional
     public Delivery replay(long tenantId, long deliveryId) {
+        return replayInTransaction(tenantId, deliveryId);
+    }
+
+    private Delivery replayInTransaction(long tenantId, long deliveryId) {
         Delivery delivery = require(tenantId, deliveryId);
         if (delivery.status() != DeliveryStatus.DEAD) {
             throw new ApiException(ErrorCode.ILLEGAL_TRANSITION,
@@ -103,5 +126,36 @@ public class DeliveryService {
         auditLogMapper.insert(tenantId, "api-key", "delivery.replay", "delivery", deliveryId,
                 "{\"attemptNo\":" + delivery.nextAttemptNo() + "}");
         return require(tenantId, deliveryId);
+    }
+
+    /**
+     * Replays each id in <b>its own transaction</b>, in request order, and reports every id
+     * individually.
+     *
+     * <p>Not one transaction for the batch: these are independent operator retries (the
+     * console's checkbox selection), and one delivery having moved on — a late worker
+     * settling it, another operator replaying it — must not roll back the nine that were
+     * fine. That is also why the caller gets {@code replayed} or the rejection reason per
+     * id instead of a boolean for the request: a partial success that says "false" is the
+     * kind of answer that makes an operator replay everything again.
+     *
+     * <p>Only {@link ApiException} is turned into a per-id rejection. A database failure
+     * propagates: it is not a fact about one delivery, and swallowing it would report
+     * "rejected" for rows that were never looked at.
+     */
+    public List<ReplayOutcome> replayBatch(long tenantId, List<Long> deliveryIds) {
+        List<ReplayOutcome> outcomes = new ArrayList<>(deliveryIds.size());
+        for (long deliveryId : deliveryIds) {
+            try {
+                Delivery replayed = transactionTemplate.execute(
+                        status -> replayInTransaction(tenantId, deliveryId));
+                outcomes.add(new ReplayOutcome(deliveryId, replayed.status().name(), null, null));
+            } catch (ApiException rejected) {
+                // The transaction has already rolled back; the reason is all that is left to say.
+                outcomes.add(new ReplayOutcome(deliveryId, null, rejected.errorCode(),
+                        rejected.getMessage()));
+            }
+        }
+        return outcomes;
     }
 }

@@ -54,6 +54,42 @@ export interface Delivery {
   updatedAt: string
 }
 
+/**
+ * One event with its payload and the deliveries it fanned out to.
+ *
+ * `payload` is the raw JSON **text** the platform stored — the API never re-encodes it, so
+ * the UI has to parse it to pretty-print it, and falls back to showing the text verbatim if
+ * it cannot. `deliveryCount` is the true total; `deliveries` is capped by the backend (200),
+ * so a shorter list means "truncated", not "this is everything".
+ */
+export interface EventDetail {
+  eventId: number
+  eventType: string
+  payload: string
+  createdAt: string
+  deliveryCount: number
+  deliveries: Delivery[]
+}
+
+/** One line of a batch replay: either replayed (with its new status) or rejected with a reason. */
+export interface ReplayResult {
+  deliveryId: number
+  replayed: boolean
+  status: string | null
+  code: number | null
+  message: string | null
+}
+
+/** Partial success by design: `replayed + rejected === results.length`. */
+export interface BatchReplay {
+  replayed: number
+  rejected: number
+  results: ReplayResult[]
+}
+
+/** Server-side cap for one batch replay (`DeliveryService.MAX_BATCH_REPLAY`). */
+export const MAX_BATCH_REPLAY = 100
+
 export const ENDPOINT_STATUSES = ['ACTIVE', 'PAUSED'] as const
 export type EndpointStatus = (typeof ENDPOINT_STATUSES)[number]
 

@@ -22,9 +22,9 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **158 个通过** | `./mvnw -o test` |
-| 后端集成测试 | **63 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **62 个通过**，~32s | `cd frontend && npm test` |
+| 后端单测 | **160 个通过** | `./mvnw -o test` |
+| 后端集成测试 | **67 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
+| 前端单测 | **69 个通过**（12 个文件） | `cd frontend && npm test` |
 | 前端覆盖率 | 语句 83.75% / 分支 82.35% / 函数 49.71%，约 69s | `npm run test:coverage` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
@@ -100,12 +100,32 @@ CAS 输了比赛的那条）。
 **没做**：路线图草稿里把删除放在 `/v1/admin/endpoints/{id}` —— 实际放在租户域 `/v1/endpoints/{id}`，
 因为 endpoint 属于租户，租户自己删自己的回调地址不需要运营令牌。路线图那一节可以按这个改。
 
-### B. 事件详情 + 批量重放
+### B. 事件详情 + 批量重放 —— 已完成
 
-- **事件详情**：`EventController.getEvent` 目前是占位实现——只返回 `EventResponse(eventId, 0, false)`，`deliveryCount` 恒为 0，也**不返回 payload**。
-  要做：新 DTO（`eventType` / `payload` / `createdAt` / 该事件的投递列表），前端点事件行开抽屉。注意 `Event.payload` 是**原始 JSON 字符串**（平台刻意不重序列化客户数据），前端要 `JSON.parse` 后格式化展示。
-- **批量重放**：后端只有单条 `POST /v1/deliveries/{id}/replay`。批量需要新接口（`POST /v1/deliveries/replay` 带 id 列表），逐条走现有 CAS，返回**部分成功**结果；只允许 DEAD，其余逐条报 `ILLEGAL_TRANSITION`。
-- 前端：事件表和投递表都加多选 + 「批量重放」。
+**事件详情**（`GET /v1/events/{id}`）：`EventDetailResponse(eventId, eventType, payload, createdAt,
+deliveryCount, deliveries)`。`payload` 是**原始 JSON 文本**（前端自己 `JSON.parse` 后格式化；解析失败按原文
+显示），`deliveries` 最多 200 条而 `deliveryCount` 是真实总数——两者不等就说明被截断了。
+
+**批量重放**（`POST /v1/deliveries/replay`）：最多 100 条，**逐条独立事务**（一条失败不回滚别的），
+所以是部分成功接口：`{replayed, rejected, results[]}`，HTTP 永远是 200。每条的规则与单条重放完全一致
+（只收 `DEAD`，否则 40903；不存在/跨租户 40400）。空列表、超 100、含 null、**有重复**都是 400——
+重复是客户端 bug，不是"顺手去重"的场景。
+
+实现要点：
+
+- `DeliveryService.replay` 拆成"带 `@Transactional` 的入口 + `replayInTransaction`"，批量版用
+  `TransactionTemplate` **每条一个事务**（自调用走不到代理，这正是拆分的原因）；只把 `ApiException`
+  转成逐条结果，数据库异常照常冒泡——那不是某一条投递的事实。
+- 事件表的多选重放会**先按事件 id 拉详情**（`fetchEventDetail`，非 hook，一次一个请求），
+  收集 DEAD 投递 id，再调一次批量接口。后端重放的单位是投递，事件只是操作员思考的单位。
+- 前端：事件行点击开抽屉（payload + 该事件扇出的投递表）；两个表都有多选；投递表的非 `DEAD` 行
+  **不可勾选**，所以非空选择永远是一个合法请求。
+- 批量确认按钮文案是 `确认重放`（不是 `重放`）：投递表每行已经有一个 `重放` 按钮，同一个名字会让
+  测试和读屏软件都分不清点的是哪个。
+
+测试：`BatchReplayIT`（2，真 MySQL：部分成功、跨租户 404、max_attempts+1、outbox/audit 各一条）、
+`ReadApiIT` 新增 2 个（payload 往返、租户隔离）、`DeliveryControllerTest`（2，请求校验与结果映射）、
+前端 `EventStreamPage`/`DeliveriesPage` 各 +3/2、`replayMessage.test.ts`（2）。
 
 ### C. 前端测试提速（纯工程）—— 已完成
 
@@ -284,6 +304,11 @@ ae43506 feat: operator console - admin read API and a React UI
 2. ~~C：前端测试提速~~ —— 已完成：139s → 70.4s（`npm test` 59.8s → 32.3s），见 §4C。
 3. ~~D：拆 `TenantsPage.tsx`~~ —— 已完成，见 §4D。
 4. ~~A：Endpoint 删除~~ —— 已完成（V5 + 5 个 IT + 3 个单测 + 前端删除操作），见 §4A。
-5. **下一步做 B（事件详情 + 批量重放）**：`EventController.getEvent` 还是占位实现（`deliveryCount`
-   恒为 0、不返回 payload），批量重放要新接口。这是日常排查最常用的两个操作，也是路线图 P0 的剩余部分。
-6. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。
+5. ~~B：事件详情 + 批量重放~~ —— 已完成（`GET /v1/events/{id}` + `POST /v1/deliveries/replay` +
+   事件抽屉 + 两张表的多选），见 §4B。
+6. 路线图 P0（「所有 CRUD 通过 UI 完成」+「前端可视化」）到这里就齐了。剩下按价值排：
+   - **E**：`src/api` 的 15 个请求函数还没有断言（覆盖率 55.6%），补 `msw`/adapter 测试；
+   - **F**：`topFailureReasons` 还没被真实死信跑过（唯一没被真数据验证的报表 SQL）；
+   - **G**：V4 索引的 before/after 数字（`tools/LoadGen` + `docs/perf/` 已有骨架）；
+   - **H**：Java SDK（路线图有代码草案）、K8s/Helm、Grafana 面板——面试展示性价比最高。
+7. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

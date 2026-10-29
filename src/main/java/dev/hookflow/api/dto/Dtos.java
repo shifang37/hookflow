@@ -87,6 +87,62 @@ public final class Dtos {
     public record DeliveryDetailResponse(DeliveryResponse delivery, List<AttemptResponse> attempts) {
     }
 
+    /**
+     * One event with the payload it was accepted with and the deliveries it fanned out to.
+     *
+     * <p>{@code payload} is the <b>raw JSON string</b>, not a parsed object: the platform
+     * never re-serialises customer data, so what is shown here is byte-for-byte what was
+     * accepted and what every delivery attempt sent. A client has to parse it to pretty-print
+     * it, and that is deliberate — parsing on this side would be the first step towards the
+     * API returning something other than what was stored.
+     *
+     * <p>{@code deliveryCount} is the total; {@code deliveries} is capped (see
+     * {@code EventController.DETAIL_DELIVERY_LIMIT}) so one event with hundreds of endpoints
+     * cannot make this response unbounded. A client can tell the list is complete by
+     * comparing the two.
+     */
+    public record EventDetailResponse(
+            long eventId,
+            String eventType,
+            String payload,
+            LocalDateTime createdAt,
+            long deliveryCount,
+            List<DeliveryResponse> deliveries) {
+    }
+
+    /**
+     * Batch replay input: delivery ids in the order the caller wants results back.
+     *
+     * <p>Duplicates are rejected rather than silently de-duplicated: replaying the same
+     * delivery twice in one request has no single correct answer (the second attempt would
+     * see the first's PENDING state and be rejected), so it is a client bug worth a 400.
+     */
+    public record BatchReplayRequest(List<Long> deliveryIds) {
+    }
+
+    /**
+     * One line of the batch replay response. {@code replayed = false} carries the reason
+     * ({@code code} / {@code message}) and leaves {@code status} null; the request as a whole
+     * still answered 200, because a partial result is the documented outcome.
+     */
+    public record ReplayResultResponse(
+            long deliveryId,
+            boolean replayed,
+            String status,
+            Integer code,
+            String message) {
+    }
+
+    /**
+     * Partial-success batch replay. {@code replayed + rejected == results.size()}, so a
+     * client never has to count to know whether the batch fully succeeded.
+     */
+    public record BatchReplayResponse(
+            int replayed,
+            int rejected,
+            List<ReplayResultResponse> results) {
+    }
+
     public record ProvisionTenantRequest(String name, Integer rateLimit,
                                         Integer maxInFlight, Integer weight) {
     }

@@ -5,30 +5,34 @@ import { ReloadOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import {
   POLL_INTERVAL_MS,
+  useBatchReplayDeliveries,
   useDeliveries,
   useReplayDelivery,
   type DeliveryQuery,
 } from '@/api/queries'
 import { formatTimestamp } from '@/api/time'
-import { DELIVERY_STATUSES, type Delivery, type DeliveryStatus } from '@/api/types'
+import { DELIVERY_STATUSES, MAX_BATCH_REPLAY, type Delivery, type DeliveryStatus } from '@/api/types'
 import { PageTitle } from '@/components/PageTitle'
 import { CredentialAlert } from '@/components/CredentialAlert'
+import { describeBatchReplay } from '@/components/replayMessage'
 import { DeliveryStatusTag, LiveBadge, STATUS_META } from '@/components/StatusTag'
 
 const PAGE_SIZE = 20
 
 /**
- * Delivery inspection, and the console's only write: replaying a dead letter.
+ * Delivery inspection, and the console's only write: replaying dead letters.
  *
  * Replay is offered only on `DEAD` rows because that is the state machine's rule
  * (ILLEGAL_TRANSITION otherwise) — the UI mirrors the backend's constraint instead of
- * letting the user discover it as a 409.
+ * letting the user discover it as a 409. The same rule drives the batch selection: rows
+ * that cannot be replayed are not selectable, so a selection is always a valid request.
  */
 export function DeliveriesPage() {
   const { message } = App.useApp()
   const [status, setStatus] = useState<DeliveryStatus | undefined>(undefined)
   const [endpointId, setEndpointId] = useState<number | null>(null)
   const [page, setPage] = useState(0)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
 
   const query = useMemo<DeliveryQuery>(
     () => ({
@@ -42,10 +46,29 @@ export function DeliveriesPage() {
 
   const { data, error, isFetching, refetch } = useDeliveries(query)
   const replay = useReplayDelivery()
+  const batchReplay = useBatchReplayDeliveries()
 
   const handleReplay = (deliveryId: number) => {
     replay.mutate(deliveryId, {
       onSuccess: () => message.success(`投递 #${deliveryId} 已重新入队`),
+      onError: (cause) => message.error(cause.message),
+    })
+  }
+
+  const handleBatchReplay = () => {
+    if (selectedRowKeys.length > MAX_BATCH_REPLAY) {
+      message.warning(`一次最多重放 ${MAX_BATCH_REPLAY} 条投递，请减少选择`)
+      return
+    }
+    batchReplay.mutate(selectedRowKeys, {
+      onSuccess: (result) => {
+        setSelectedRowKeys([])
+        if (result.rejected === 0) {
+          message.success(describeBatchReplay(result))
+        } else {
+          message.warning(describeBatchReplay(result))
+        }
+      },
       onError: (cause) => message.error(cause.message),
     })
   }
@@ -129,6 +152,19 @@ export function DeliveriesPage() {
         subtitle="按状态或 Endpoint 过滤 · 需要租户 API Key"
         actions={
           <Space>
+            {selectedRowKeys.length > 0 && (
+              <Popconfirm
+                title={`重放选中的 ${selectedRowKeys.length} 条投递？`}
+                description="每条回到 PENDING 并各多一次尝试额度；状态已变化的会被逐条拒绝并告诉你原因。"
+                okText="确认重放"
+                cancelText="取消"
+                onConfirm={handleBatchReplay}
+              >
+                <Button size="small" type="primary" loading={batchReplay.isPending}>
+                  批量重放（{selectedRowKeys.length}）
+                </Button>
+              </Popconfirm>
+            )}
             <LiveBadge intervalMs={POLL_INTERVAL_MS.deliveries} fetching={isFetching} />
             <Button icon={<ReloadOutlined />} size="small" onClick={() => void refetch()}>
               刷新
@@ -203,6 +239,13 @@ export function DeliveriesPage() {
           dataSource={data?.items ?? []}
           loading={isFetching && data === undefined}
           scroll={{ x: 980 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys.map(Number)),
+            // Mirrors the state machine: a row that cannot be replayed must not be
+            // selectable, so a non-empty selection is always a valid request.
+            getCheckboxProps: (delivery) => ({ disabled: delivery.status !== 'DEAD' }),
+          }}
           pagination={{
             current: page + 1,
             pageSize: PAGE_SIZE,

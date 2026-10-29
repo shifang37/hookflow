@@ -1,19 +1,25 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '@/test/render'
 import { useUiStore } from '@/stores/uiStore'
-import type { Delivery } from '@/api/types'
+import type { BatchReplay, Delivery } from '@/api/types'
 
 vi.mock('@/api/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/queries')>()
-  return { ...actual, useDeliveries: vi.fn(), useReplayDelivery: vi.fn() }
+  return {
+    ...actual,
+    useDeliveries: vi.fn(),
+    useReplayDelivery: vi.fn(),
+    useBatchReplayDeliveries: vi.fn(),
+  }
 })
 
-import { useDeliveries, useReplayDelivery } from '@/api/queries'
+import { useBatchReplayDeliveries, useDeliveries, useReplayDelivery } from '@/api/queries'
 import { DeliveriesPage } from './DeliveriesPage'
 
 const mockedUseDeliveries = vi.mocked(useDeliveries)
 const mockedUseReplay = vi.mocked(useReplayDelivery)
+const mockedUseBatchReplay = vi.mocked(useBatchReplayDeliveries)
 
 function delivery(overrides: Partial<Delivery> = {}): Delivery {
   return {
@@ -45,10 +51,15 @@ describe('DeliveriesPage', () => {
   beforeEach(() => {
     mockedUseDeliveries.mockReset()
     mockedUseReplay.mockReset()
+    mockedUseBatchReplay.mockReset()
     mockedUseReplay.mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
     } as unknown as ReturnType<typeof useReplayDelivery>)
+    mockedUseBatchReplay.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    } as unknown as ReturnType<typeof useBatchReplayDeliveries>)
     useUiStore.setState({ tenantToken: 'hk_test', adminToken: '' })
   })
 
@@ -95,5 +106,58 @@ describe('DeliveriesPage', () => {
     renderWithProviders(<DeliveriesPage />)
 
     expect(screen.getByText('没有匹配的投递。')).toBeInTheDocument()
+  })
+
+  it('only lets DEAD rows be selected for a batch, mirroring the state machine', () => {
+    withDeliveries([
+      delivery({ id: 7, status: 'DEAD' }),
+      delivery({ id: 8, status: 'SUCCEEDED', lastErrorClass: null, lastStatusCode: null }),
+    ])
+
+    renderWithProviders(<DeliveriesPage />)
+
+    // Index 0 is the header's select-all; the rows follow in data order.
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes[1]).toBeEnabled()
+    expect(checkboxes[2]).toBeDisabled()
+  })
+
+  it('batch-replays the selection and reports a partial result', async () => {
+    const partial: BatchReplay = {
+      replayed: 1,
+      rejected: 1,
+      results: [
+        { deliveryId: 7, replayed: true, status: 'PENDING', code: null, message: null },
+        {
+          deliveryId: 8,
+          replayed: false,
+          status: null,
+          code: 40903,
+          message: 'Only DEAD deliveries can be replayed (current: SUCCEEDED)',
+        },
+      ],
+    }
+    const mutate = vi.fn(
+      (_ids: number[], options?: { onSuccess?: (result: BatchReplay) => void }) => {
+        options?.onSuccess?.(partial)
+      },
+    )
+    mockedUseBatchReplay.mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useBatchReplayDeliveries>)
+    withDeliveries([delivery({ id: 7, status: 'DEAD' })])
+
+    renderWithProviders(<DeliveriesPage />)
+
+    fireEvent.click(screen.getAllByRole('checkbox')[1] as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: /批量重放/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确认重放' }))
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
+    expect(mutate.mock.calls[0]?.[0]).toEqual([7])
+    // The batch endpoint's answer is a partial result; a silent "done" would hide the
+    // rejected id, which is the one the operator has to act on.
+    expect(await screen.findByText(/1 条被拒绝/)).toBeInTheDocument()
   })
 })
