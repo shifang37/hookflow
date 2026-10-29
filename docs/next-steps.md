@@ -137,11 +137,7 @@ deliveryCount, deliveries)`。`payload` 是**原始 JSON 文本**（前端自己
 | `npm run test:coverage` | **139s** | 70.4s | **70.2s** |
 | 测试文件 / 用例 | 9 / 60 | 11 / 60 | **15 / 76** |
 
-第二轮拆分：`EndpointsPage.test.tsx` 在 A 之后是 10 个用例、插桩后 **84.9s**，成了新的关键路径（整轮
-93.5s）。按同样的办法拆成 `EndpointsPage.list` / `.actions` / `.create` 三个文件（夹具放
-`src/test/endpointFixtures.ts`），关键路径回落到 `TenantsPage.keys` 的 62s，整轮回到 70s。
-
-做法：`TenantsPage.test.tsx` 一个文件里 11 个用例、每个都渲染整页 + 抽屉 + 弹窗，v8 插桩后
+**第一轮**：`TenantsPage.test.tsx` 一个文件 11 个用例、每个都渲染整页 + 抽屉 + 弹窗，v8 插桩后
 一个文件就占 127s（suite 的测试时间总共 234s）。vitest 只在**文件之间**并行、文件内部串行，
 所以按主题拆成三个：
 
@@ -154,10 +150,14 @@ deliveryCount, deliveries)`。`payload` 是**原始 JSON 文本**（前端自己
 `vi.mock('@/api/queries')` 必须留在每个测试文件里（vitest 会把它提到 import 之前）。
 用例名字和断言一字未改，60 个用例全过，覆盖率三个维度完全没变（83.63 / 82.35 / 49.71）。
 
+**第二轮**：A 的删除用例让 `EndpointsPage.test.tsx` 涨到 10 个用例、插桩后 **84.9s**，成了新的
+关键路径（整轮 93.5s，超出 < 90s 的目标）。按同样办法拆成 `.list` / `.actions` / `.create`
+（夹具 `src/test/endpointFixtures.ts`），关键路径回落到 `TenantsPage.keys` 的 62s，整轮回到 70s。
+
 没动的：`testTimeout` 仍是 30s（`vite.config.ts` 里有原因说明），没有用 `--shard`。
 
-**下一个瓶颈**（想再往下压才需要动）：`EndpointsPage.test.tsx` 现在插桩后 62.5s，
-`TenantsPage.keys` / `.create` 也还在 52–59s 区间——要再快就按同样办法拆这两个。
+**下一个瓶颈**（想再往下压才需要动）：`TenantsPage.keys.test.tsx` 插桩后 62s、
+`TenantsPage.create` 56s、`EndpointsPage.create` 46s——要再快就继续按主题拆。
 
 ### D. `TenantsPage.tsx` 拆分（纯重构）—— 已完成
 
