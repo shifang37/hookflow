@@ -20,6 +20,7 @@
 | `2026-10-23-settle-batch/` | v0.4 B6 settle 批量提交：**负结果**，提交 −36% / 吞吐 −25%，已回退 | §20 |
 | `2026-10-23-worker32/` | v0.4 B7 worker 32 并发 + 池 32（450 入口；含 relay batch 50/100/200 与"新默认值"的一次运行） | §21 |
 | `2026-10-23-relay-batch-size/` | v0.4 B8 relay batch-size 50/100/200（900 入口、有积压时的容量曲线） | §22 |
+| `2026-10-29-v4-index/` | V4 索引 A/B：同一份 100 万行数据，只差 `idx_delivery_updated_status`；图表查询与 settle/insert 吞吐 | §23 |
 
 每个目录里：
 
@@ -34,6 +35,20 @@
 | `statements.txt` | MySQL 按 digest 聚合的语句耗时与次数（窗口 = 本次运行） |
 | `broker.txt` | 跑完后 `hookflow.delivery` 队列的深度、在途、消费者数 |
 | `fairness.txt` / `fairness.json` | 公平性 A/B 的汇总 |
+
+`2026-10-29-v4-index/` 是个例外：它不经过 `bench.ps1`，而是一轮**数据库层的 A/B**（没有应用、没有 broker），
+所以文件是这几样：
+
+| 文件 | 内容 |
+|---|---|
+| `meta.txt` | 机器、容器、MySQL 版本与关键参数、git rev |
+| `seed.txt` | 数据量核对（1M 行总数、24h 窗口内行数） |
+| `without-index.txt` / `with-index.txt` | 两个臂的三组测量：图表查询 ×3、settle 50k 点更新 ×3、insert 100k ×1 |
+| `explain-without-index.txt` / `explain-with-index.txt` | 同一条图表 SQL 的 `EXPLAIN ANALYZE`，实际耗时与行数 |
+
+DDL 与过程定义的输出是空的（没有结果集），所以没有留空文件；`run.ps1` 每次都从零重建数据库。
+
+生成方式：[`scripts/perf/v4-index/run.ps1`](../../scripts/perf/v4-index/run.ps1)（SQL 与脚本同目录）。
 
 ## 没有提交进仓库的
 

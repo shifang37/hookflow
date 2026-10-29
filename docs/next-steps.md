@@ -216,16 +216,31 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 为什么直接写库而不是故障注入：要让 worker 产生 6 种不同的 error class，得配 6 种接收方故障，
 又慢又碎；被测的是"settled DEAD 行上的那一条 SQL"，不是"怎么变成 DEAD 的"（那条路径 `ReceiverFaultIT` 已经覆盖）。
 
-### G. 索引收益没有量化
+### G. 索引收益没有量化 —— 已完成
 
-`V4` 加了 `idx_delivery_updated_status`，但没有前后对比数据。仓库里有 `tools/LoadGen` 和 `docs/perf/` 的结构，
-可以做一轮 before/after 把吞吐和图表查询延迟记进去。
+`docs/performance.md §23` + 原始输出 `docs/perf/2026-10-29-v4-index/`，可复现脚本
+`scripts/perf/v4-index/run.ps1`（起一个 mysql:8.4 容器、灌 100 万行、两臂各跑一遍）。数字：
+
+| 测量 | before（无索引） | after（有索引） | 变化 |
+|---|---:|---:|---|
+| 平台级结算图表（24h/15m，窗口 15.9 万行） | 316.4 ms | **131.7 ms** | **2.4×**（−58%） |
+| settle：50k 点更新 | 55.7k 行/s | 50.2k 行/s | **−10%** |
+| ingest：100k 单行插入 | 103.8k 行/s | 96.8k 行/s | −7%（单次，指示性） |
+
+计划也一并记了：没有索引是 `Table scan on d rows=1e+6`（扫描 87.6 ms），有索引是
+`Covering index range scan ... rows=172712`（15.7 ms，不回表）；**聚合那 ~100 ms 两者一样**，
+所以下一步的优化空间在"预聚合"，不在更好的索引。
+
+为什么不是全链路压测：这一格的问题是"这条索引对这条查询和这条写路径各值多少"，数据库层 A/B
+能直接回答，而且 3 分钟能复现；`tools/LoadGen` 的全链路跑一次要十几分钟，噪声还更大。
+口径与边界写在 §23.5（无并发写、温缓存、只测了一条查询）。
 
 仍然没索引、且**迁移注释里写明了为什么先不加**的：
 - `event(created_at)` —— 平台级事件计数会全表扫，但 `event` 是写入最热的表
 - `delivery(created_at)` —— `stats`/`overview` 的窗口计数
 
-要加之前先读 `V4__report_read_indexes.sql` 顶部的注释，那里有完整取舍。
+要加之前先读 `V4__report_read_indexes.sql` 顶部的注释，那里有完整取舍；现在多了 §23 这一组基线数字，
+如果哪天给这两列加索引，可以按同样的方法量一次再决定。
 
 ### H. 路线图剩下的 P1/P2/P3
 
@@ -341,8 +356,10 @@ ae43506 feat: operator console - admin read API and a React UI
    事件抽屉 + 两张表的多选），见 §4B。
 6. ~~E：`src/api` 请求函数无测试~~ —— 已完成：21 个请求函数逐个断言，`src/api` 语句 55.6% → 61.6%，见 §4E。
 7. ~~F：`topFailureReasons` 无真实死信~~ —— 已完成：`FailureReasonsIT` 覆盖分组、百分比分母和 `LIMIT`，见 §4F。
-8. 路线图 P0 和测试债都清了。剩下按价值排：
-   - **G**：V4 索引的 before/after 数字（`tools/LoadGen` + `docs/perf/` 已有骨架）——唯一还缺的"实测"类工作；
+8. ~~G：V4 索引收益未量化~~ —— 已完成：图表查询 316 → 132 ms（2.4×），settle −10%、insert −7%，
+   见 [performance.md §23](performance.md#23-v4-的索引图表查询快-24-倍settle-慢-10) 与 `docs/perf/2026-10-29-v4-index/`。
+9. 剩下的按价值排：
    - **H**：Java SDK（路线图有代码草案）、K8s/Helm、Grafana 面板——面试展示性价比最高；
    - **queries.ts 的 hook 覆盖**（24%）：`renderHook` + `QueryClient` wrapper 能盖住轮询/失效逻辑；
+   - **预聚合**：§23.3 说明图表查询剩下的 ~100 ms 全在聚合，索引已经到顶；
    - 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

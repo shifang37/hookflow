@@ -1,0 +1,14 @@
+date: 2026-10-29T20:23:46.0793577+08:00
+git: cd81fd9
+docker: 29.6.2
+image: mysql:8.4
+host cpu: Intel(R) Core(TM) i5-14600K
+host logical cpus: 20
+host ram gb: 31.7
+container flags: --innodb-buffer-pool-size=2G --innodb-flush-log-at-trx-commit=1 --skip-log-bin
+
++---------+---------------+-----------+
+| version | pool_mb       | flush_log |
++---------+---------------+-----------+
+| 8.4.13  | 2560.00000000 |         1 |
++---------+---------------+-----------+

@@ -1,13 +1,16 @@
 # 性能报告：单机能扛多少，瓶颈在哪
 
 - 测量日期：2026-10-22（v0.3 基线）/ 2026-10-23（§14 批量入口、§15 B0 再基线、§16 B4 批量发布、
-  §18 B5 worker 并发、§20 B6 settle 批量提交的负结果、§21 B7 worker 32 并发、§22 B8 relay batch-size）
-- 代码版本：v0.3.0 → v0.4（A2 批量入口、B4 批量发布、B5 worker 并发、B7/B8 默认值）
+  §18 B5 worker 并发、§20 B6 settle 批量提交的负结果、§21 B7 worker 32 并发、§22 B8 relay batch-size）/
+  2026-10-29（§23 V4 索引 A/B）
+- 代码版本：v0.3.0 → v0.4（A2 批量入口、B4 批量发布、B5 worker 并发、B7/B8 默认值 → v0.5 控制台）
 - 原始输出：[docs/perf/2026-10-22/](perf/2026-10-22/)（v0.3 基线）、[docs/perf/2026-10-23-batch/](perf/2026-10-23-batch/)（§14）、
   [docs/perf/2026-10-23-downstream/](perf/2026-10-23-downstream/)（§15）、[docs/perf/2026-10-23-relay-batch/](perf/2026-10-23-relay-batch/)（§16）、
   [docs/perf/2026-10-23-worker/](perf/2026-10-23-worker/)（§18）、[docs/perf/2026-10-23-settle-batch/](perf/2026-10-23-settle-batch/)（§20）、
-  [docs/perf/2026-10-23-worker32/](perf/2026-10-23-worker32/)（§21）、[docs/perf/2026-10-23-relay-batch-size/](perf/2026-10-23-relay-batch-size/)（§22）
-- 复现命令：`.\scripts\bench.ps1 ...`（见文末「如何复现」）
+  [docs/perf/2026-10-23-worker32/](perf/2026-10-23-worker32/)（§21）、[docs/perf/2026-10-23-relay-batch-size/](perf/2026-10-23-relay-batch-size/)（§22）、
+  [docs/perf/2026-10-29-v4-index/](perf/2026-10-29-v4-index/)（§23）
+- 复现命令：`.\scripts\bench.ps1 ...`（见文末「如何复现」）；§23 是数据库层 A/B，用
+  `.\scripts\perf\v4-index\run.ps1`（不经过 bench.ps1，也没有应用和 broker）
 
 > **红线（来自 v0.3 计划）**：测不出来就不写数字。README 里不出现任何未测的 QPS。
 > 本文所有数字都对应 `docs/perf/` 下的一份原始输出；没有原始输出的东西，本文写"未测"。
@@ -1033,3 +1036,107 @@ ADR-0014 说的崩溃重复窗口从 100 行放大到 200 行。**200 留给"追
   tick 的节拍；这一节没有把两者拆开。
 - **900 / batch 200 撞到了队列上限**，"relay 能不能稳定跑 731/s"没有测满 60 秒以上。
 - **每个格子一次运行**（450 的 batch 50 有两次），没有做方差分析。
+
+---
+
+## 23. V4 的索引：图表查询快 2.4 倍，settle 慢 10%
+
+> V4 加了 `idx_delivery_updated_status (updated_at, status)`，迁移注释里写了两件事：它让平台级图表
+> 不必全表扫，但它给最热的更新路径加了写放大。**两件事之前都没有数字**。这一节把它们量出来：
+> 24h / 15m 的结算图表（窗口内 15.9 万条已结算投递）**316 ms → 132 ms**（中位数，2.4×）；
+> 代价是 settle 的点更新 **55.7k → 50.2k 行/s（−10%）**、单行插入 **103.8k → 96.8k 行/s（−7%）**。
+> 原始输出：[`docs/perf/2026-10-29-v4-index/`](perf/2026-10-29-v4-index/)，
+> 生成方式：[`scripts/perf/v4-index/run.ps1`](../scripts/perf/v4-index/run.ps1)。
+
+### 23.1 怎么测的
+
+这不是一次全链路压测，是一次**数据库层的 A/B**：同一份数据、同一个容器、只差一个索引。
+
+**数据**（`seed.sql`）：一个租户、20 个 endpoint、15 万 event、**100 万 delivery** 铺在最近 7 天。
+状态分布是 80% SUCCEEDED / 8% DEAD / 4% CANCELED / 4% PENDING / 4% RETRY_WAIT —— 这是刻意"忙"的：
+92% 已结算意味着图表要在窗口里聚合几乎每一条。一个安静租户会让两臂都很快，什么也证明不了。
+实际落在 24h 窗口里的是 **158 968 条**（其中已结算 158 940 条；前者见 `seed.txt`，后者见
+`explain-without-index.txt` 的 `rows=158940`）。`meta.txt` 里的 git rev 是运行时的 HEAD
+（`cd81fd9`），这份 benchmark 脚本当时还在工作区，随后才提交。
+
+**环境**（`meta.txt`）：mysql:8.4.13 容器，`--innodb-buffer-pool-size=2G`（1M 行装得下，比的不是 IO）、
+`--innodb-flush-log-at-trx-commit=1`、`--skip-log-bin`；同一台 i5-14600K / 31.7 GB / 20 逻辑核。
+
+**两臂**：`without-index` 是建表时的状态，`with-index` 只加 `idx_delivery_updated_status`。
+写基准在 `delivery_write` 上做（`CREATE TABLE ... LIKE delivery`，无外键、200k 行），
+**读基准的数据集因此不会被写基准改动**。
+
+**计时**：读操作是 `ReportMapper.settlementBuckets` 的原样 SQL（`WITH RECURSIVE grid`，24h、900 s 桶、
+平台级无租户过滤），每次一个单独的 `COUNT(*)` 包裹，连跑 3 次，用存储过程里的 `NOW(6)` 计时；
+写操作是 50k 次按主键的点更新放在**一个事务**里（DEAD → SUCCEEDED，并显式重写 `updated_at`），
+3 次，每次前把 `delivery_write` 重置成 200k 行 DEAD。单事务是刻意的：每次提交的 fsync 会给两臂
+加同样的常数、把要找的差异埋掉；提交次数本身的成本在 §20 量过。
+
+### 23.2 图表查询：316 ms → 132 ms
+
+| 运行 | without index | with index |
+|---|---:|---:|
+| 1 | 316.4 ms | 160.3 ms |
+| 2 | 316.8 ms | 131.4 ms |
+| 3 | 316.3 ms | 131.7 ms |
+| **中位数** | **316.4 ms** | **131.7 ms** |
+
+with-index 的第一次 160 ms 是唯一一次冷索引的痕迹（索引刚建，页还在磁盘上），后两次是稳态。
+不带索引的三次几乎一样——全表扫不依赖页命中。
+
+### 23.3 计划对比：扫 100 万行 vs 覆盖索引扫 17.3 万条
+
+`explain-without-index.txt`：
+
+```
+-> Filter: (d.updated_at >= ... AND d.updated_at < ... AND d.status IN (...))
+    (actual time=0.0327..139 rows=158940 loops=1)
+    -> Table scan on d (actual time=0.029..87.6 rows=1e+6 loops=1)
+-> Aggregate using temporary table (actual time=208..208 rows=97)
+```
+
+`explain-with-index.txt`：
+
+```
+-> Filter: (...)
+    (actual time=0.0251..39.5 rows=158904 loops=1)
+    -> Covering index range scan on d using idx_delivery_updated_status
+       (actual time=0.0233..15.7 rows=172712 loops=1)
+-> Aggregate using temporary table (actual time=108..108 rows=97)
+```
+
+**读法**：省下的是**扫描**——87.6 ms → 15.7 ms，而且 `covering` 意味着这条查询完全不回表（它只要
+`updated_at` 和 `status`，两个都在索引里）。省不下的是**聚合**：把 15.9 万行装进 97 个桶要 ~90–100 ms，
+索引对这个无能为力。EXPLAIN 的总时间（209 / 108 ms）比存储过程的计时（316 / 132 ms）小，
+差的是过程里那层 `COUNT(*)` 与结果物化；两条时间线趋势一致，表格用过程数，因为那更接近 API 实际付的钱。
+
+**所以**：这条曲线的下一步不是更好的索引，而是"要不要预聚合"——现在每次刷新都从明细重算。
+
+### 23.4 写代价：settle −10%，ingest −7%
+
+| 基准 | without index | with index | 变化 |
+|---|---:|---:|---:|
+| settle：50k 次点更新（3 次中位数） | 897 ms / **55.7k 行/s** | 996 ms / **50.2k 行/s** | 时间 +11%，吞吐 **−10%** |
+| ingest：100k 次单行插入（1 次） | 963 ms / **103.8k 行/s** | 1 033 ms / **96.8k 行/s** | 时间 +7%，吞吐 **−7%** |
+
+原因就是 V4 注释里写的那个：`updated_at` 是 `ON UPDATE CURRENT_TIMESTAMP`，每一次状态变更都会重写
+这条索引项。settle 的 −10% 就是它为图表付的钱。插入那条只有一次运行，读作"指示性"而不是分布。
+
+**这笔账划不划算**：每次 settle 多花 ~2 µs（17.9 → 19.9 µs/行）；按 §21 的 ~470 次投递/s 折算，
+索引多占的数据库时间约 **0.9 ms/s**。一个打开着的监控页按 15 s 轮询一次图表，每次省 ~185 ms，
+即约 **12 ms/s**/页面。**只要有人在看图表，它就是赚的**——这也是为什么它留在默认 schema 里，
+而不是做成可选项。
+
+### 23.5 这一节**没有**证明什么
+
+- **没有并发写**：写基准在一个事务里跑，没有 32 个 worker 同时 claim/settle 的锁竞争。真实系统里
+  索引维护会和并发写争 buffer pool 和 latch，这一节没有那一部分。
+- **没有冷启动数据**：两臂都是温缓存（1M 行、池 2G）；with-index 的第一次 160 ms 是唯一的冷痕迹，
+  但没有单独测"冷缓存下快多少"。
+- **只测了一条查询**：`settlementBuckets` 是 V4 注释点名的那个；`stats`/`overview` 的窗口计数
+  走 status-leading 索引，没有同样对比。
+- **租户级图表没测**：带 `tenantId` 的图表查询会走 `idx_delivery_tenant_status`，这一节测的是
+  平台级（无过滤）那一支。
+- **没有动"要不要加 `delivery(created_at)` / `event(created_at)`"**：V4 注释里"先不加"的理由
+  （event 是写入最热的表）没有变化，这一节没有给出反对它的数据。
+
