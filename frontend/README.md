@@ -57,6 +57,7 @@ src/
 ├── pages/            # 四个页面
 ├── stores/uiStore.ts # 时间窗口、凭证抽屉
 ├── test/setup.ts     # jsdom 缺口（matchMedia、ResizeObserver、getComputedStyle）
+├── test/tenantFixtures.ts  # 租户页三个测试文件共用的夹具与 mock 默认值
 └── theme.ts          # AntD token + 图表配色
 ```
 
@@ -90,9 +91,13 @@ npm run test:coverage
 ```
 
 > **为什么慢**：AntD 在 jsdom 里渲染一个带抽屉/弹窗的页面要几秒，覆盖率插桩后再翻倍，
-> 所以 `testTimeout` 是 30s 而不是默认的 5s（`vite.config.ts` 里有说明）。整套约 2.5 分钟，
-> 其中租户页那个文件占一半——它一个人就渲染十几次整页。要提速的话，按页面拆文件让
-> vitest 并行跑，或者 CI 里用 `--shard`，不必调超时。
+> 所以 `testTimeout` 是 30s 而不是默认的 5s（`vite.config.ts` 里有说明）。
+>
+> Vitest 只在**文件之间**并行，文件内部的用例是串行的 —— 所以页面测试按主题拆文件，
+> 而不是把一套夹具和十个用例全塞进一个文件：`TenantsPage.list/keys/create.test.tsx`
+> 三个文件能同时跑，共用 `src/test/tenantFixtures.ts`。拆完这套是 `npm test` 约 32s、
+> `npm run test:coverage` 约 70s（拆之前 60s / 139s）。下一个瓶颈是
+> `EndpointsPage.test.tsx`（插桩后约 63s）；要再快就按同样办法拆它，不必调超时。
 
 ## 还没做的
 

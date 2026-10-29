@@ -24,8 +24,8 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 |---|---|---|
 | 后端单测 | **154 个通过** | `./mvnw -o test` |
 | 后端集成测试 | **58 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **60 个通过** | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 83.63% / 分支 82.35% / 函数 49.71% | `npm run test:coverage` |
+| 前端单测 | **60 个通过**，32.3s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 83.63% / 分支 82.35% / 函数 49.71%，70.4s | `npm run test:coverage` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -86,20 +86,38 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 - **批量重放**：后端只有单条 `POST /v1/deliveries/{id}/replay`。批量需要新接口（`POST /v1/deliveries/replay` 带 id 列表），逐条走现有 CAS，返回**部分成功**结果；只允许 DEAD，其余逐条报 `ILLEGAL_TRANSITION`。
 - 前端：事件表和投递表都加多选 + 「批量重放」。
 
-### C. 前端测试提速（纯工程）
+### C. 前端测试提速（纯工程）—— 已完成
 
-整套从 70s 涨到 **139s**（v8 覆盖率插桩后）。瓶颈是 `TenantsPage.test.tsx`：11 个用例、每个都渲染整页 + 抽屉 + 弹窗，一个文件占了一半时间。
+现在（本机 20 逻辑核）：
 
-- 同一个文件里的用例只能串行。**按页面/主题拆文件**（如 `TenantsPage.keys.test.tsx` / `TenantsPage.create.test.tsx`）让 vitest 并行；
-  或 CI 里用 `vitest --shard`。
-- 不要去调 `testTimeout`（已经是 30s，`vite.config.ts` 里有原因说明）。
-- 目标：< 90s。
+| 命令 | 拆之前 | 拆之后 |
+|---|---|---|
+| `npm test` | 59.8s | **32.3s** |
+| `npm run test:coverage` | **139s** | **70.4s** |
+
+做法：`TenantsPage.test.tsx` 一个文件里 11 个用例、每个都渲染整页 + 抽屉 + 弹窗，v8 插桩后
+一个文件就占 127s（suite 的测试时间总共 234s）。vitest 只在**文件之间**并行、文件内部串行，
+所以按主题拆成三个：
+
+- `TenantsPage.list.test.tsx`（列表、抽屉统计、空死信、缺令牌）
+- `TenantsPage.keys.test.tsx`（Key 列表、撤销门槛、签发只显示一次、撤销确认）
+- `TenantsPage.create.test.tsx`（空名拦截、创建成功、409 冲突）
+
+7 个 hook 的默认返回值 / `mockReset` / 夹具全部收到 `src/test/tenantFixtures.ts`（含
+`withTenants` / `withStats` / `withKeys` / `resetTenantPageMocks` / `typing`）。
+`vi.mock('@/api/queries')` 必须留在每个测试文件里（vitest 会把它提到 import 之前）。
+用例名字和断言一字未改，60 个用例全过，覆盖率三个维度完全没变（83.63 / 82.35 / 49.71）。
+
+没动的：`testTimeout` 仍是 30s（`vite.config.ts` 里有原因说明），没有用 `--shard`。
+
+**下一个瓶颈**（想再往下压才需要动）：`EndpointsPage.test.tsx` 现在插桩后 62.5s，
+`TenantsPage.keys` / `.create` 也还在 52–59s 区间——要再快就按同样办法拆这两个。
 
 ### D. `TenantsPage.tsx` 拆分（纯重构）
 
 589 行，里面 5 个组件：页面、`TenantStatusTag`、`TenantDetailDrawer`、`TenantKeysCard`、`CreateTenantModal`。
 建议拆成 `components/TenantKeysCard.tsx` 和 `components/CreateTenantModal.tsx`。
-是纯搬移，测试只 import `TenantsPage`，行为不变。**做之前先做 C**，否则每次验证都要等 2 分钟。
+是纯搬移，测试只 import `TenantsPage`，行为不变。**C 已做完**（验证一次 70s / 32s，不再要等 2 分钟），可以直接开工。
 
 ### E. `src/api` 的请求函数没有测试
 
@@ -229,6 +247,6 @@ ae43506 feat: operator console - admin read API and a React UI
 ## 7. 建议的下一步
 
 1. ~~先提交~~ —— 已完成：`ae43506`，工作区干净。
-2. 接下来按 **C → D**（测试提速 + 拆 `TenantsPage`）：这两件事让后面每一次改动都更快，属于投资。
-3. 再挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是验收标准，B 补的是日常排查最常用的两个操作。
+2. ~~C：前端测试提速~~ —— 已完成：139s → 70.4s（`npm test` 59.8s → 32.3s），见 §4C。
+3. 现在做 **D**（拆 `TenantsPage.tsx`，纯重构），然后挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是验收标准，B 补的是日常排查最常用的两个操作。
 4. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。
