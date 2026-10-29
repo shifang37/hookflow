@@ -731,6 +731,17 @@ public class SecurityConfig {
 
 ## P1：Java SDK
 
+> **状态（2026-10-29）**：已实现，代码在 [`sdk/java/`](../sdk/java/)，包名 `dev.hookflow.sdk`，
+> 是**独立的 Maven 项目**（自己的 `pom.xml`，不改根 pom）。下面「技术选型 / 项目结构 /
+> 核心代码」是立项时的草案，和最终实现的差异：
+> - **没有引入 Failsafe 3.3.2**：它的同步重试内部直接 `Thread.sleep`，无法注入测试用的
+>   `Sleeper`（Plan J.5 明确要求「测试里不要真的 sleep」），也拿不到按响应覆盖延迟的钩子；
+>   重试循环改为手写（`HookFlowClient.executeWithRetry`），行为按 J.3 的表格实现。
+> - Jackson 用 **2.17.x**（不是草案里的 2.16，也不是服务端的 Jackson 3）。
+> - 重试白名单额外包含 **429**（草案只写了 5xx）。
+>
+> 验收状态见本节末尾。
+
 ### 现状问题
 
 - 用户需要手写 HTTP 请求
@@ -1088,24 +1099,31 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 
 /**
- * 工具类：验证 HookFlow 发送的 Webhook 签名
+ * 工具类：验证 HookFlow 发送的 Webhook 签名。
+ *
+ * 签名串是 "v1:eventId:deliveryId:timestampSeconds:rawBody"，header 是 "v1=<hex>"。
+ * 生产接入请直接用官方 SDK 的 HookFlowWebhook（见 sdk/java），这里保留草稿是为了
+ * 说明协议；SDK 已经处理了大小写不敏感的 header、毫秒时间戳与常量时间比较。
  */
 public class HookFlowWebhook {
     
     /**
-     * 验证 Webhook 签名（推荐方式）
+     * 验证 Webhook 签名。
      *
-     * @param requestBody 原始请求体（JSON 字符串）
+     * @param rawBody 收到的原始字节（不能反序列化后再 toString）
      * @param signature HTTP 头 X-HookFlow-Signature 的值
-     * @param timestamp HTTP 头 X-HookFlow-Timestamp 的值
+     * @param timestamp HTTP 头 X-HookFlow-Timestamp 的值（epoch 秒）
+     * @param eventId HTTP 头 X-HookFlow-Event-Id 的值
+     * @param deliveryId HTTP 头 X-HookFlow-Delivery-Id 的值
      * @param secret Endpoint 的签名密钥
      * @return 签名是否有效
      */
-    public static boolean verify(String requestBody, String signature, String timestamp, String secret) {
+    public static boolean verify(byte[] rawBody, String signature, String timestamp,
+                                 long eventId, long deliveryId, String secret) {
         // 1. 防重放攻击：检查时间戳（5 分钟内有效）
         long ts;
         try {
-            ts = Long.parseLong(timestamp);
+            ts = Long.parseLong(timestamp.trim());
         } catch (NumberFormatException e) {
             return false;
         }
@@ -1115,13 +1133,14 @@ public class HookFlowWebhook {
             return false;
         }
         
-        // 2. 计算期望签名：HMAC-SHA256(timestamp + "." + body, secret)
-        String payload = timestamp + "." + requestBody;
-        String expectedSignature = computeHMAC(payload, secret);
+        // 2. 计算期望签名：HMAC-SHA256(secret, "v1:eventId:deliveryId:timestamp:rawBody")
+        String signedPrefix = "v1:" + eventId + ":" + deliveryId + ":" + ts + ":";
+        String expectedSignature = "v1=" + HexFormat.of().formatHex(
+            computeHMAC(signedPrefix.getBytes(StandardCharsets.UTF_8), rawBody, secret));
         
-        // 3. 时间安全的比较
+        // 3. 时间安全的比较（比较完整的 "v1=<hex>"，不是裸 hex）
         return MessageDigest.isEqual(
-            signature.getBytes(StandardCharsets.UTF_8),
+            signature.trim().getBytes(StandardCharsets.UTF_8),
             expectedSignature.getBytes(StandardCharsets.UTF_8)
         );
     }
@@ -1129,7 +1148,7 @@ public class HookFlowWebhook {
     /**
      * 计算 HMAC-SHA256 签名
      */
-    private static String computeHMAC(String data, String secret) {
+    private static byte[] computeHMAC(byte[] prefix, byte[] body, String secret) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             SecretKeySpec secretKey = new SecretKeySpec(
@@ -1137,8 +1156,9 @@ public class HookFlowWebhook {
                 "HmacSHA256"
             );
             mac.init(secretKey);
-            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
+            mac.update(prefix);
+            mac.update(body);
+            return mac.doFinal();
         } catch (Exception e) {
             throw new RuntimeException("Failed to compute HMAC", e);
         }
@@ -1149,13 +1169,15 @@ public class HookFlowWebhook {
      */
     // @PostMapping("/webhooks/hookflow")
     // public ResponseEntity<Void> handleWebhook(
-    //     @RequestBody String body,
+    //     @RequestBody byte[] body,
     //     @RequestHeader("X-HookFlow-Signature") String signature,
-    //     @RequestHeader("X-HookFlow-Timestamp") String timestamp
+    //     @RequestHeader("X-HookFlow-Timestamp") String timestamp,
+    //     @RequestHeader("X-HookFlow-Event-Id") long eventId,
+    //     @RequestHeader("X-HookFlow-Delivery-Id") long deliveryId
     // ) {
     //     String secret = "whsec_...";  // 从配置读取
     //     
-    //     if (!HookFlowWebhook.verify(body, signature, timestamp, secret)) {
+    //     if (!HookFlowWebhook.verify(body, signature, timestamp, eventId, deliveryId, secret)) {
     //         return ResponseEntity.status(401).build();
     //     }
     //     
@@ -1167,29 +1189,25 @@ public class HookFlowWebhook {
 
 ### 验收标准
 
-- [ ] 支持单条/批量发送事件
-- [ ] 支持幂等性和自动重试
-- [ ] 提供 Webhook 签名验证工具
-- [ ] 有完整的 JavaDoc 和 README
-- [ ] 单元测试覆盖率 ≥ 80%
-- [ ] 发布到 Maven Central 或 JitPack
+- [x] 支持单条/批量发送事件
+- [x] 支持幂等性和自动重试（客户端生成/复用 `Idempotency-Key`，重试重发同一份字节）
+- [x] 提供 Webhook 签名验证工具（时间戳窗口 + 常量时间比较）
+- [x] 有完整的 JavaDoc 和 README（`mvn javadoc:javadoc` 无 error）
+- [x] 单元测试覆盖率 ≥ 80%（JaCoCo **LINE 92.9%**，66 个测试）
+- [ ] 发布到 Maven Central 或 JitPack —— **未发布**。本计划改为 GitHub Packages：
+      tag `sdk-v*` 触发 [`.github/workflows/sdk-publish.yml`](../.github/workflows/sdk-publish.yml)，
+      但还没有实际 deploy 产物；`mvn install` + 一个独立的临时项目引用并跑通 `sendEvent` 已验证。
 
 ### 发布流程
 
 ```bash
-# 1. 打包
-mvn clean package
+# 在仓库根目录。SDK 是独立项目，构建命令不会碰根 pom。
+mvn -f sdk/java/pom.xml -B verify
+mvn -f sdk/java/pom.xml source:jar javadoc:jar install
 
-# 2. 安装到本地（供其他项目使用）
-mvn install
-
-# 3. 发布到 Maven Central（需要注册 Sonatype 账号）
-mvn clean deploy -P release
-
-# 4. 或发布到 JitPack（更简单，直接推 tag）
-git tag v1.0.0
-git push origin v1.0.0
-# 用户可通过 https://jitpack.io/#<username>/hookflow-java-sdk 引入
+# 发布到 GitHub Packages（需要 packages: write 的 token，CI 里用 GITHUB_TOKEN）
+git tag sdk-v0.1.0
+git push origin sdk-v0.1.0
 ```
 
 ---

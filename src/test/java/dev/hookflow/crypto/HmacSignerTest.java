@@ -52,4 +52,20 @@ class HmacSignerTest {
         assertThat(HmacSigner.sign(SECRET, EVENT_ID, DELIVERY_ID, TIMESTAMP, BODY))
                 .isEqualTo(HmacSigner.sign(SECRET, EVENT_ID, DELIVERY_ID, TIMESTAMP, BODY));
     }
+
+    /**
+     * Cross-repo anti-drift vector: the Java SDK asserts the same input/hex pair in
+     * {@code sdk/java/src/test/java/dev/hookflow/sdk/HookFlowWebhookTest.java}.
+     *
+     * <p>If the signed string, the version prefix or the hex casing changes on either
+     * side, one of the two suites fails. Do not update one without the other.
+     */
+    @Test
+    void matchesTheJavaSdkReferenceVector() {
+        byte[] secret = "s3cr3t".getBytes(StandardCharsets.UTF_8);
+        byte[] body = "{\"amount\":42}".getBytes(StandardCharsets.UTF_8);
+
+        assertThat(HmacSigner.sign(secret, 12, 34, 1_760_000_000L, body))
+                .isEqualTo("v1=9c1e11fe90c12fb041fa3f1a13252152b8b666e3b736e7aab65c65d324a8d0d4");
+    }
 }

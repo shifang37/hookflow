@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '@/test/render'
 import { activeEndpoint, pausedEndpoint, resetEndpointPageMocks, withEndpoints } from '@/test/endpointFixtures'
@@ -40,6 +40,25 @@ describe('EndpointsPage', () => {
     // AntD inserts a space between two CJK characters, so the names are not literal.
     expect(screen.getAllByRole('button', { name: /暂\s*停/ })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: /恢\s*复/ })).toHaveLength(1)
+  })
+
+  it('documents the real signature string, not the dot-separated draft', () => {
+    withEndpoints([activeEndpoint])
+    const { container } = renderWithProviders(<EndpointsPage />)
+
+    // The hint lives in the expanded row; AntD only renders it after the row opens.
+    const expand = container.querySelector<HTMLButtonElement>('.ant-table-row-expand-icon')
+    if (!expand) throw new Error('endpoint row is not expandable')
+    fireEvent.click(expand)
+    expect(container.querySelector('.ant-table-expanded-row')).not.toBeNull()
+
+    // The hint renders the construction expression, not a literal signing string:
+    // HMAC-SHA256(secret, "v1:" + eventId + ":" + ...) and header v1=<hex>.
+    const codeTexts = Array.from(container.querySelectorAll('code')).map((code) => code.textContent)
+    expect(codeTexts.some((text) => text?.includes(
+      '"v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody'))).toBe(true)
+    expect(codeTexts).toContain('v1=<hex>')
+    expect(codeTexts.some((text) => text?.includes('timestamp + "."'))).toBe(false)
   })
 
   it('shows the empty state when the tenant has no endpoints', () => {

@@ -314,11 +314,12 @@ function EndpointHints({ endpoint }: { endpoint: Endpoint }) {
       <div>
         接收方用建 Endpoint 时拿到的那串 secret 验证签名：
         <Typography.Text code className="!text-xs">
-          HMAC-SHA256(secret, timestamp + "." + eventId + "." + deliveryId + "." + body)
+          HMAC-SHA256(secret, "v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody)
         </Typography.Text>
-        ，比对 <Typography.Text code className="!text-xs">X-HookFlow-Signature</Typography.Text>，
-        并校验 <Typography.Text code className="!text-xs">X-HookFlow-Timestamp</Typography.Text> 在
-        ±300s 内。
+        ，结果写成 <Typography.Text code className="!text-xs">v1=&lt;hex&gt;</Typography.Text> 与{' '}
+        <Typography.Text code className="!text-xs">X-HookFlow-Signature</Typography.Text> 比对，
+        并校验 <Typography.Text code className="!text-xs">X-HookFlow-Timestamp</Typography.Text>
+        （epoch 秒）在 ±300s 内。
       </div>
       <div className="mt-1">
         {endpoint.status === 'PAUSED'

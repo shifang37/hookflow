@@ -514,10 +514,10 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 **当前限制（不掩饰）**：
 
 - 单 region、单 MySQL 主库，没有分片
-- 没有 SDK（Java / Python）
+- Python SDK 未提供；**Java SDK** 在 [`sdk/java/`](sdk/java/README.md)（独立的 Maven 项目，`mvn install` 后即可引用）
 - 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 增删改查（含软删除）、
   事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
-  剩余的是 SDK、K8s/Helm、Grafana 这类外围（见 [docs/next-steps.md](docs/next-steps.md)）
+  剩余的是 K8s/Helm、Grafana 这类外围（见 [docs/next-steps.md](docs/next-steps.md)）
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
@@ -534,7 +534,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；未开始：4C8G 真机基线、告警看板、传输层 SPI + Kafka、Java SDK、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；未开始：4C8G 真机基线、告警看板、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
 
 **后续工作与优化计划**（含缺口清单、验收标准、预估工作量、环境坑汇总）：[docs/v0.4-plan.md](docs/v0.4-plan.md)。
 这份文档是给「下一个接手的人」看的，能独立读——包含当前基线、P1/P2/P3 任务、以及明确不做什么。
@@ -566,6 +566,11 @@ src/main/resources/static/demo/
 ├── index.html       演示控制台页面（无构建步骤，跟着 jar 一起发）
 ├── app.js           轮询 /v1/demo/state 并渲染；按钮只调用控制台 API
 └── style.css
+
+sdk/java/
+├── pom.xml          独立 Maven 项目（Java 17，OkHttp + Jackson 2，JaCoCo 门槛 80%）
+├── README.md        5 分钟接入、重试/幂等、接收方验签、GitHub Packages 引用
+└── src/             客户端、webhook 验签、MockWebServer 测试、可运行示例
 
 docs/
 ├── adr/             14 条架构决策（含 0009/0010/0011/0012/0013/0014）

@@ -314,6 +314,9 @@ curl -X POST localhost:8080/v1/endpoints \
 
 ## Event
 
+> **官方 SDK**：Java 客户端在 [`sdk/java/`](../sdk/java/README.md)，封装了单条/批量发送、
+> 幂等键生成与重试、以及接收方验签；协议以本文为准。
+
 ### POST /v1/events
 
 ```bash
@@ -590,6 +593,17 @@ curl -X POST localhost:8080/v1/deliveries/replay \
 
 ## 接收方验签示例（Java）
 
+推荐直接用 SDK，它把时间戳窗口、常量时间比较、大小写不敏感的 header 都处理了：
+
+```java
+Verification v = HookFlowWebhook.verify(secret, headerAccessor, rawBody);
+if (!v.valid()) {
+    log.warn("webhook rejected: {}", v.reason());   // MISSING_HEADER / MALFORMED_TIMESTAMP / STALE_TIMESTAMP / BAD_SIGNATURE
+}
+```
+
+需要自己实现时，服务端的唯一权威逻辑是：
+
 ```java
 String expected = HmacSigner.sign(
         secret,                                  // 建 endpoint 时拿到的那串
@@ -597,10 +611,14 @@ String expected = HmacSigner.sign(
         Long.parseLong(header("X-HookFlow-Delivery-Id")),
         Long.parseLong(header("X-HookFlow-Timestamp")),
         rawBody);
-boolean ok = expected.equals(header("X-HookFlow-Signature"));
+boolean ok = MessageDigest.isEqual(
+        expected.getBytes(StandardCharsets.UTF_8),
+        header("X-HookFlow-Signature").getBytes(StandardCharsets.UTF_8));
 ```
 
-再配合时间戳窗口校验（±300s）和以 `event_id` 为唯一键的幂等写入，接收方就完整了。
+注意：时间戳是**秒**，body 必须是收到的**原始字节**（不能反序列化后再序列化），签名串是
+`v1:eventId:deliveryId:timestamp:rawBody`，header 是 `v1=<hex>`。再配合时间戳窗口校验
+（±300s）和以 `event_id` 为唯一键的幂等写入，接收方就完整了。
 
 ## 接收方侧：把 trace 接上（v0.3）
 

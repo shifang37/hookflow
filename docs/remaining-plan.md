@@ -5,6 +5,7 @@
 > 路线图本身只记"想做什么"，现状与已完成项见 [next-steps.md](next-steps.md) 与本文 §1。
 >
 > **执行顺序：J（Java SDK）→ K（K8s/Helm）→ G（Grafana）→ C（CI/CD 补完）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）**。
+> **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)），下一步 K 或 G。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -14,23 +15,27 @@
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **160 个通过** | `.\mvnw.cmd -o test` |
+| 后端单测 | **161 个通过** | `.\mvnw.cmd -o test` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
-| 前端单测 | **76 个通过**（15 个文件，~34s） | `cd frontend; npm test` |
-| 前端覆盖率 | 语句 84.95% / 分支 83.01% / 函数 61.16%，~70s | `npm run test:coverage` |
+| 前端单测 | **77 个通过**（15 个文件，~35s） | `cd frontend; npm test` |
+| 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
+| Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
 | 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck; npm run lint` |
-| 前端生产构建 | 通过（app chunk ≈ 51 kB） | 见 §9 的 TEMP 绕法后 `npm run build:backend` |
+| 前端生产构建 | 通过（app chunk ≈ 57 kB） | 见 §9 的 TEMP 绕法后 `npm run build:backend` |
 | 已有 ADR | 15 条 | `docs/adr/` |
 
 最近 10 个 commit（`git log --oneline -10`）：控制台、测试拆分、Endpoint 删除、事件详情/批量重放、
 请求层测试、V4 索引 benchmark。**master 已推送到 GitHub，工作区应当是干净的**。
 
-路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 三项未开始**，**P2 只完成了 CI 的测试部分**，
-**P3 目标未达**。详细对照见 §11。
+路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 的 Java SDK 已完成（K8s/Grafana 未开始）**，
+**P2 只完成了 CI 的测试部分**，**P3 目标未达**。详细对照见 §11。
 
 ---
 
 ## 2. 任务 J：Java SDK（第一步，2–3 天）
+
+> **状态：已完成（2026-10-29）**。实现、测试与 README 见 [`sdk/java/`](../sdk/java/)；
+> 验收清单在 J.8，两处与计划的偏差（重试不用 Failsafe、未实际发布）在 J.2 / J.7 注明。
 
 ### J.0 开工前先读这 4 个文件（约 15 分钟）
 
@@ -49,14 +54,15 @@
 
 路线图验收（[optimization-roadmap.md](optimization-roadmap.md) §P1 Java SDK（L1168 附近））逐条落地：
 
-- [ ] 单条 + 批量发送事件
-- [ ] 幂等性（客户端生成/传递 `Idempotency-Key`，**重试复用同一个 key**）与自动重试
-- [ ] Webhook 签名验证工具（时间戳窗口 + 常量时间比较）
-- [ ] 完整 JavaDoc + README + 可运行示例
-- [ ] 单元测试覆盖率 ≥ 80%（JaCoCo，LINE）
-- [ ] 构建产物可被其他项目引用（`mvn install` 验证）
-- [ ] 发布到 Maven Central / JitPack —— **本计划改为 GitHub Packages**（原因见 J.2），
-      拿不到发布权限就只做 `mvn install` 并在文档里标注未发布
+- [x] 单条 + 批量发送事件
+- [x] 幂等性（客户端生成/传递 `Idempotency-Key`，**重试复用同一个 key**）与自动重试
+- [x] Webhook 签名验证工具（时间戳窗口 + 常量时间比较）
+- [x] 完整 JavaDoc + README + 可运行示例
+- [x] 单元测试覆盖率 ≥ 80%（JaCoCo LINE **92.9%**，gate 已开 `haltOnFailure`）
+- [x] 构建产物可被其他项目引用（`mvn install` + `$env:TEMP` 下的独立项目跑通 `sendEvent`）
+- [ ] 发布到 Maven Central / JitPack —— **本计划改为 GitHub Packages**（原因见 J.2）。
+      tag 触发的发布 workflow 已写（`.github/workflows/sdk-publish.yml`），但**尚未实际 deploy**，
+      README 已标注「未发布」；本版本只能 `mvn install` 后本地引用
 
 ### J.2 位置与构建决策（先读，避免走错）
 
@@ -67,7 +73,7 @@
 | Java 版本 | **release 17** | SDK 用户未必有 21；服务端用 21 不代表客户端要用 |
 | HTTP | **OkHttp 4.12** | 路线图选型；连接池/超时/拦截器成熟 |
 | JSON | **Jackson 2.17.x**（`jackson-databind`） | 与大多数 Spring Boot 3 用户兼容；**不要**依赖服务端的 Jackson 3（`tools.jackson`） |
-| 重试 | **Failsafe 3.3.2** | 路线图选型；只有这一个非必需依赖 |
+| 重试 | **手写循环**（原计划 Failsafe 3.3.2） | Failsafe 3.3.2 的同步重试内部直接 `Thread.sleep`（`RetryPolicyExecutor`），无法注入测试用 `Sleeper`，也没有按响应覆盖延迟的钩子；手写约 40 行就能完全按 J.3/J.5 实现，还少一个依赖。见 [HookFlowClient.java](../sdk/java/src/main/java/dev/hookflow/sdk/HookFlowClient.java) 的 `executeWithRetry` |
 | 测试 | JUnit 5 + AssertJ + **OkHttp MockWebServer**（test scope） | 真的走 HTTP（含头、重试、超时），不需要起 Spring |
 | 覆盖率 | JaCoCo `0.8.12`，`LINE >= 0.80`，`haltOnFailure` | 验收要求 |
 | 发布 | **`mvn install` + GitHub Packages（CI，tag 触发）** | Maven Central 要 Sonatype 账号；JitPack 需要独立仓库。两个都不是本次能单方面完成的，GitHub Packages 可以在同一个仓库里一条 workflow 完成。README 里写清如何从 GitHub Packages 引用 |
@@ -270,29 +276,36 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ### J.7 构建、CI 与发布
 
+本机没有全局 `mvn`，用仓库自带的 wrapper（`-f` 指向 SDK，根 pom 不受影响）：
+
 ```powershell
-# 第一次需要联网（failsafe、jacoco 还没在本地 .m2 里），之后可以 -o
-mvn -f sdk/java/pom.xml -B verify
-mvn -f sdk/java/pom.xml -B source:jar javadoc:jar install   # 产物可被其他项目引用
+# 第一次需要联网（jacoco、mockwebserver 等还没在本地 .m2 里）；
+# `-o` 只适用于已经缓存好依赖之后。
+.\mvnw.cmd -f sdk/java/pom.xml -B verify
+.\mvnw.cmd -f sdk/java/pom.xml -B source:jar javadoc:jar install   # 产物可被其他项目引用
 ```
 
-- 新增 `.github/workflows/sdk.yml`（或给 `ci.yml` 加 `sdk` job）：
-  `working-directory: sdk/java`，跑 `mvn -B verify`，上传 `target/site/jacoco`。
-- 发布 workflow：`on: push: tags: ['sdk-v*']` → `mvn deploy` 到 GitHub Packages
-  （`distributionManagement` + `settings.xml` 用 `GITHUB_TOKEN`，权限 `packages: write`）。
-  **如果这一步拿不到 token/权限，可以只做 `mvn install` + README，并在文档里标注"发布未做"**——
-  不要在没验证的情况下声称已发布。
+> 环境坑：PowerShell 调 `.cmd` 时 `-Dhttps.proxyHost=...` 这类参数会被拆开
+> （Maven 报 `Unknown lifecycle phase ".proxyHost=..."`）。本机走代理时改成
+> `$env:MAVEN_OPTS='-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890'`，
+> 不要把它们放到命令行。CI 里没有代理，不需要这段。
+
+- 新增 `.github/workflows/sdk.yml`：`working-directory: sdk/java`，跑 `mvn -B verify` +
+  `javadoc:javadoc`，上传 `target/site/jacoco`。
+- 发布 workflow：`.github/workflows/sdk-publish.yml`，`on: push: tags: ['sdk-v*']` →
+  `mvn deploy` 到 GitHub Packages（`distributionManagement` + `settings.xml` 用 `GITHUB_TOKEN`，
+  权限 `packages: write`）。**尚未实际执行过 deploy**，所以 README 明确写「未发布」。
 - README 里写清「如何从 GitHub Packages 引用」，以及在没发布时的替代方案（`mvn install` 后本地依赖）。
 
 ### J.8 J 的完成定义（Checklist）
 
-- [ ] `mvn -f sdk/java/pom.xml verify` 绿，JaCoCo LINE ≥ 80%
-- [ ] 参考向量两边都断言；`HmacSignerTest` 增加该用例
-- [ ] 两处错误的签名文档已修（UI 提示 + 路线图草案），并补前端断言
-- [ ] README 有：5 分钟 quickstart、重试/幂等语义、验签示例、错误码表、GitHub Packages 引用
-- [ ] `mvn install` 后，一个**独立的临时项目**（可以放 `$env:TEMP`）能依赖并跑通 `sendEvent`（对 MockWebServer）
-- [ ] CI job 存在且绿（本地先跑一遍同样的命令）
-- [ ] 文档更新：`docs/api.md` 加一段"官方 SDK"链接；`README.md` 的"没有 SDK"那条删掉；`docs/next-steps.md` 不再把 SDK 列为未做
+- [x] `mvn -f sdk/java/pom.xml verify` 绿，JaCoCo LINE ≥ 80%（实际 92.9%）
+- [x] 参考向量两边都断言；`HmacSignerTest` 增加该用例
+- [x] 两处错误的签名文档已修（UI 提示 + 路线图草案），并补前端断言
+- [x] README 有：5 分钟 quickstart、重试/幂等语义、验签示例、错误码表、GitHub Packages 引用
+- [x] `mvn install` 后，一个**独立的临时项目**（放在 `$env:TEMP`）能依赖并跑通 `sendEvent`（对 MockWebServer）
+- [ ] CI job 存在且绿（job 已写，本地等价命令已绿；**尚未在 GitHub 上跑过**）
+- [x] 文档更新：`docs/api.md` 加一段"官方 SDK"链接；`README.md` 的"没有 SDK"那条删掉；`docs/next-steps.md` 不再把 SDK 列为未做
 
 ### J.9 J 的坑（血泪版）
 
@@ -303,8 +316,16 @@ mvn -f sdk/java/pom.xml -B source:jar javadoc:jar install   # 产物可被其他
 4. **重试时幂等键必须不变**，否则服务端当成新事件，重复投递。
 5. **批量响应按 `index` 对齐**，不要依赖数组顺序（虽然服务端按顺序返回，但契约是 `index`）。
 6. **不要用服务端的 Jackson 3**：`tools.jackson` 是 Jackson 3 的包名，外部项目大多还是 Jackson 2。
-7. **`-o` 离线构建**：SDK 的新依赖（failsafe/jacoco）第一次要联网；服务端的 `-o` 习惯不要套用。
+7. **`-o` 离线构建**：SDK 的新依赖（jacoco/mockwebserver 等）第一次要联网；服务端的 `-o` 习惯不要套用。
 8. **Python/Java 两个 SDK 的验签实现要互相对照**：两边都断言同一个参考向量，别各写各的。
+9. **OkHttp 会自己重试 `503 + Retry-After: 0`**：`RetryAndFollowUpInterceptor` 认为这是「立刻重试」，
+   会在同一连接上再发一次。body 和幂等键不变，不会重复事件，但服务端请求数会比 `maxAttempts` 多；
+   测试里用非零 `Retry-After` 才能精确断言请求次数。README 已把这个行为写清。
+10. **PowerShell 的 `Set-Content -Encoding UTF8` 会写 BOM**：javac 直接报 `非法字符: '\ufeff'`；
+    这次改 `HookFlowWebhook.java` 时又踩了一次。改源码用编辑工具，非要用 PowerShell 就
+    `[System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($false)))`。
+11. **`mvnw.cmd` 在 PowerShell 里会拆开 `-D...=...` 参数**：报 `Unknown lifecycle phase ".proxyHost=..."`。
+    代理/仓库之类的 JVM 参数放 `MAVEN_OPTS`，不要放命令行；CI（bash + `mvn`）不受影响。
 
 ---
 
@@ -455,7 +476,7 @@ mvn -f sdk/java/pom.xml -B source:jar javadoc:jar install   # 产物可被其他
 |---|---|---|
 | P0 前端可视化 | ✅ 基本完成（缺投递详情、移动端验证） | U-1 |
 | P0 管理后台 | ✅ 基本完成（缺租户状态、Endpoint 测试、告警/设置） | U-2、U-3 |
-| P1 Java SDK | ❌ | **J（第一步）** |
+| P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ❌（有 Dockerfile/compose 底座） | K |
 | P1 Grafana | ❌（指标端点已就绪，缺面板/告警/两个指标） | G |
 | P2 CI/CD | ◐（测试流水线有，Codecov/镜像/Helm/徽章无） | C |

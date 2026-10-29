@@ -1,0 +1,41 @@
+name: sdk-publish
+
+# Publishing is tag-driven so a release is an explicit act:
+#   git tag sdk-v0.1.0 && git push origin sdk-v0.1.0
+# The artifact goes to GitHub Packages, not Maven Central (which would need a
+# Sonatype account). Nothing has been published by this workflow yet.
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/java
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17 and GitHub Packages credentials
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: sdk/java/pom.xml
+          # Must match <distributionManagement><repository><id>github</id> in pom.xml.
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Deploy to GitHub Packages
+        run: mvn -B deploy -DskipTests
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
