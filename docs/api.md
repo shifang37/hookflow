@@ -37,6 +37,7 @@ API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
 | 40901 | `IDEMPOTENCY_KEY_REUSED` | 409 | 幂等键复用 |
 | 40902 | `ENDPOINT_PAUSED` | 409 | endpoint 已暂停 |
 | 40903 | `ILLEGAL_TRANSITION` | 409 | 状态不允许该操作（如重放非 DEAD 的投递） |
+| 40904 | `ALREADY_EXISTS` | 409 | 唯一约束冲突：租户名重复，或同一租户下重复的回调地址 |
 | 42900 | `RATE_LIMITED` | 429 | 超出租户速率（**按事件数计**，一批 500 条要 500 个配额） |
 | 42902 | `TENANT_BACKLOG_EXCEEDED` | 429 | **该租户**未投递积压超过水位线，带 `Retry-After` |
 | 50000 | `INTERNAL` | 500 | 未预期错误（细节只在日志里，用 requestId 查） |
@@ -60,6 +61,8 @@ curl -X POST localhost:8080/v1/admin/tenants \
 
 `201` → `{"tenantId":1,"name":"acme","apiKey":"hk_xxxxxxxx_yyyy…","keyPrefix":"xxxxxxxx"}`
 
+重名返回 `409` `ALREADY_EXISTS`（唯一键 `uk_tenant_name`），不会签发半个租户或第二把 Key。
+
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `rateLimit` | 100 | 每秒事件数，`0` 表示不限速 |
@@ -75,6 +78,175 @@ curl -X POST localhost:8080/v1/admin/tenants \
 ### POST /v1/admin/keys/{apiKeyId}/revoke
 
 撤销 Key。`204`。
+
+## 运营控制台接口
+
+和上面的 `/v1/admin/**` 是**同一个信任域**（`X-Bootstrap-Token`）：那组负责开通（建租户、发 Key、撤 Key），这一组负责观测（谁在用、用得怎么样、平台整体如何），外加一个改租户策略的写接口。
+
+### GET /v1/admin/tenants?search=&page=0&size=20
+
+租户列表，按 id 倒序。每行带 `endpointCount` 与 `activeKeyCount`，用关联子查询一次带出来，避免控制台再发 N 个请求。
+
+```json
+{
+  "items": [
+    {"tenantId": 1, "name": "acme", "status": "ACTIVE", "rateLimit": 100,
+     "maxInFlight": 32, "weight": 1, "endpointCount": 3, "activeKeyCount": 2,
+     "createdAt": "2026-10-20T03:11:08.221"}
+  ],
+  "page": 0, "size": 20, "total": 1
+}
+```
+
+`search` 是名称的包含匹配（`LIKE %term%`）。
+
+### GET /v1/admin/tenants/{id}
+
+单个租户，字段与列表项相同。这是运营域，不存在"跨租户访问"问题——它看得见所有租户。
+
+### GET /v1/admin/tenants/{id}/keys
+
+列出该租户的 API Key **元数据**（含已撤销的，按 id 倒序）。
+
+```json
+[
+  {"id": 11, "keyPrefix": "aB3dE7fG", "scopes": "event:write,endpoint:write,delivery:read",
+   "status": "ACTIVE", "createdAt": "2026-10-29T08:00:00.000", "revokedAt": null},
+  {"id": 10, "keyPrefix": "zY9xW8vU", "scopes": "event:write",
+   "status": "REVOKED", "createdAt": "2026-10-01T08:00:00.000",
+   "revokedAt": "2026-10-29T07:59:00.000"}
+]
+```
+
+这个接口**只返回元数据**：表里的 `key_hash` 根本没被 `SELECT` 出来（见 `ApiKeyQueryMapper`），所以将来也不可能不小心漏出哈希；明文更是从来不存在于任何读接口。
+
+已撤销的 Key 保留在列表里：轮换是否发生过、什么时候发生的，只能靠它证明——「消失」和「从没签发过」在界面上是一回事。
+
+租户不存在返回 `404`，不是空数组：「没有这个租户」和「这个租户没有 Key」必须能区分。
+
+配对的写接口在 [运营接口](#post-v1admintenantstenantidkeys) 一节：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| `POST` | `/v1/admin/tenants/{tenantId}/keys` | 签发新 Key，**明文只在这次响应里** |
+| `POST` | `/v1/admin/keys/{apiKeyId}/revoke` | 撤销，`204`；之后用它的请求一律 `401` |
+
+### GET /v1/admin/tenants/{id}/stats?range=7d
+
+`range` 只接受 `24h` / `7d` / `30d` / `90d`（默认 `7d`），**其他值返回 `400`**，不静默回退。
+
+```json
+{
+  "tenantId": 1, "range": "7d",
+  "totalEvents": 1240, "deliveries": 2480,
+  "succeeded": 2400, "dead": 30, "canceled": 50, "inFlight": 0,
+  "successRate": 98.77, "avgLatencyMs": 812, "backlog": 0,
+  "topFailureReasons": [
+    {"errorClass": "SERVER_5XX", "statusCode": 500, "count": 20, "percentage": 66.67},
+    {"errorClass": "TIMEOUT", "statusCode": null, "count": 10, "percentage": 33.33}
+  ]
+}
+```
+
+口径是接口契约的一部分，控制台和 Prometheus 面板必须用同一套定义，否则两处数字对不上：
+
+| 字段 | 口径 |
+|---|---|
+| `totalEvents` | 窗口内**被接受**的事件数 |
+| `deliveries` / `succeeded` / `dead` / `canceled` / `inFlight` | 窗口内**创建**的投递、按**当前**状态分组；这五项相加 = `deliveries` |
+| `successRate` | `succeeded / (succeeded + dead)`，百分比。**只按已结算投递算**：在途投递既不算成功也不算失败，否则一个百万积压会显示 99.9% 成功率；没有已结算投递时为 `0` |
+| `avgLatencyMs` | 窗口内 `SUCCEEDED` 投递的 `created_at → updated_at`，**含排队等待与全部重试**（用户实际感受到的延迟）。窗口内没有成功投递时为 `null`，不是 `0` |
+| `backlog` | **当前**未投递数（`PENDING`/`DELIVERING`/`RETRY_WAIT`），**不受窗口影响**——运维关心的是现在堵着什么，不是上周堵过什么 |
+| `topFailureReasons` | 窗口内 `DEAD` 投递按 `(errorClass, statusCode)` 分组取前 5。**不按响应体消息分组**：那是攻击者可控的文本，既无界又会把 payload 片段漏进聚合里。`percentage` 以窗口内 `dead` 为分母 |
+
+窗口由 MySQL 的 `NOW(3) - INTERVAL ? HOUR` 计算，**不用 JVM 时钟**：JVM 与数据库时区不一致时，Java 算出的窗口会整体偏几小时，而症状只是"数字有点怪"。见 [failures/0002-two-clocks.md](failures/0002-two-clocks.md)。
+
+### PATCH /v1/admin/tenants/{id}
+
+```bash
+curl -X PATCH localhost:8080/v1/admin/tenants/1 \
+  -H 'X-Bootstrap-Token: ...' -H 'Content-Type: application/json' \
+  -d '{"rateLimit":200,"weight":5}'
+```
+
+- 省略的字段保持原值；**三个字段都不给是 `400`**，不是静默 no-op
+- 约束：`rateLimit >= 0`（0 = 不限速）、`maxInFlight >= 0`（0 = 不限并发）、`weight ∈ [1,100]`
+- 修改后**立即刷新调度器快照**，下一次发布就按新权重生效，不必等 refresh interval
+- `200` → 更新后的租户（含 counts），控制台可直接替换那一行
+
+### GET /v1/admin/overview?range=24h
+
+平台级聚合，字段与租户统计一致（但去掉 `tenantId` 与 `topFailureReasons`），额外带 `activeTenants`、`activeEndpoints`。默认窗口 `24h`。
+
+**为什么不在 `/v1/dashboard/**`**：`/v1/**` 由租户 API Key 认证，平台级数字不能出现在租户域里，否则任何租户都能读到别人的量。运营视图统一放在 `/v1/admin/**`。
+
+### GET /v1/admin/metrics/timeseries?range=24h&interval=auto&tenantId=
+
+折线图用的分桶计数。
+
+```bash
+curl "localhost:8080/v1/admin/metrics/timeseries?range=24h&interval=auto&tenantId=1" \
+  -H 'X-Bootstrap-Token: ...'
+```
+
+```json
+{
+  "range": "24h", "interval": "15m", "bucketSeconds": 900,
+  "from": "2026-10-28T09:15", "to": "2026-10-29T09:15",
+  "points": [
+    {"bucketStart": "2026-10-28T09:15", "events": 0, "attempts": 0,
+     "succeeded": 0, "dead": 0, "canceled": 0},
+    {"bucketStart": "2026-10-28T09:30", "events": 12, "attempts": 14,
+     "succeeded": 10, "dead": 0, "canceled": 0}
+  ]
+}
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `range` | `24h` | `24h` / `7d` / `30d` / `90d` |
+| `interval` | `auto` | `auto` 或 `5m` `15m` `30m` `1h` `3h` `6h` `12h` `1d` |
+| `tenantId` | — | 省略即**平台级**；带上就是单个租户（租户详情页的图） |
+
+`auto` 的规则是「不超过 120 个点的最细粒度」，解析出的具体值会原样回填到 `interval`，前端标 x 轴不需要再实现一遍这个规则：
+
+| range | 24h | 7d | 30d | 90d |
+|---|---|---|---|---|
+| auto | `15m`（96 点） | `3h`（56 点） | `6h`（120 点） | `1d`（90 点） |
+
+几个必须知道的口径：
+
+- **点数是确定的**：`points.length == ceil(range / interval)`，不含隐藏的尾部空桶。窗口以**当前正在填充的那个桶**收尾，所以最后一个点天然是部分数据（活图就该这样）。
+- **`events`/`attempts` 按到达时间计，`succeeded`/`dead`/`canceled` 按结算时间计**。一次突发会先看到 `events` 的尖峰，再看到结算计数延迟爬升——这正是要看的形状。如果两者都按创建时间算，积压就会被画成「已经处理完了」。
+- **零填充**：没有数据的桶也在结果里，计数器为 0。否则折线会把 10:00 直接连到 14:00，把四小时的空洞画成一条平滑的直线。
+- `canceled` 单独列出而不是并进 `dead`：暂停 endpoint 造成的取消和对方持续 500 是两件事，混在一起会让人去查下游故障。
+- `400`：未知 `range` / 未知 `interval` / 桶数超过 1000（例如 `90d` + `5m` = 25 920 个桶）。
+
+最细粒度是 **`5m` 而不是 `1m`**：最短的 range 是 24h，一分钟粒度就是 1440 个桶，超过上限；而且分桶网格用递归 CTE 物化，MySQL 的 `cte_max_recursion_depth` 默认就是 1000。与其提供一个任何合法请求都用不了的选项，不如不提供。
+
+分桶对齐由 MySQL 完成（`FLOOR(UNIX_TIMESTAMP(now) / bucket)`），Java 不参与：`DATETIME` 是墙钟时间，JVM 不知道数据库会话时区，自己算边界会让整张图偏移几小时。前提是数据库会话时区固定（本项目按 UTC 部署）。
+
+### GET /v1/admin/metrics/latency?range=24h&tenantId=
+
+单次 HTTP 尝试的耗时分布。
+
+```json
+{
+  "range": "24h", "samples": 1234,
+  "p50Ms": 12, "p95Ms": 480, "p99Ms": 1200,
+  "buckets": [
+    {"upperBoundMs": 50, "count": 900, "percentage": 72.93},
+    {"upperBoundMs": 100, "count": 200, "percentage": 16.21},
+    {"upperBoundMs": null, "count": 4, "percentage": 0.32}
+  ]
+}
+```
+
+- 边缘固定为 `50/100/250/500/1000/2500/5000/10000` ms，**最后一个桶的 `upperBoundMs` 是 `null`**，表示「≥ 10s 或超时」。没有这个开放桶，最慢的那批尝试会被悄悄丢掉。
+- 百分位是 **nearest-rank**：返回的是真实观测到的耗时，不做插值。跟 SLA 对话时这个数更容易解释。
+- 无样本时 `p50/p95/p99` 是 `null` 而**不是 0**，`samples` 就是分母——前端据此区分「很快」和「没测到」。
+- 数据源是 `delivery_attempt.duration_ms`：**单次尝试的 HTTP 耗时**，不含排队和重试退避。端到端的（含排队和全部重试）看 `stats` 里的 `avgLatencyMs`。
+- 目前这是唯一能画出延迟分布的数据源：平台没有注册 Micrometer Timer，`hookflow_delivery_duration_seconds_bucket` 还不存在（见 [optimization-roadmap.md](optimization-roadmap.md) 里 Grafana 一节的说明）。等真加了 Timer，这个接口可以平滑切过去，响应形状不变。
 
 ---
 
@@ -108,6 +280,8 @@ curl -X POST localhost:8080/v1/endpoints \
 ```
 
 `subscribedTypes` 支持逗号分隔列表或 `*`（全部）。匹配是**精确匹配**，不是前缀匹配。
+
+同一租户下重复的 `url` 返回 `409` `ALREADY_EXISTS`（唯一键是 `(tenant_id, url)` —— 不同租户可以用同一个地址）。
 
 `maxConcurrency`（默认 `0` = 不限）：允许打到这个 URL 的**并行调用数上限**。接收方扛不住并发时填它，替代方案是让它把整个租户拖慢——见 [capability 文档](capacity.md) §4 的"接收方慢"一行。
 
@@ -171,6 +345,36 @@ curl -X POST localhost:8080/v1/events \
 | `429` `RATE_LIMITED` | 超过租户每秒配额 | 下一整秒再试 |
 | `429` `TENANT_BACKLOG_EXCEEDED` | 该租户自己的未投递积压太高 | 按 `Retry-After` 退避；平台对其他租户仍然健康 |
 | `503` `OVER_CAPACITY` | 平台整体过载 | 按 `Retry-After` 退避；这不是租户的问题 |
+
+### GET /v1/events?eventType=&from=&to=&page=0&size=20
+
+控制台的事件流：**按 id 倒序**，每行带该事件的投递汇总，一个请求就能画出整张表。
+
+```bash
+curl "localhost:8080/v1/events?eventType=order.paid&page=0&size=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "items": [
+    {"eventId": 12, "eventType": "order.paid", "deliveryCount": 2,
+     "succeededCount": 1, "failedCount": 0, "inFlightCount": 1,
+     "createdAt": "2026-10-29T08:31:02.114"}
+  ],
+  "page": 0, "size": 20, "total": 1
+}
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `eventType` | — | **精确匹配**，不做前缀匹配 |
+| `from` / `to` | — | ISO-8601 本地时间（UTC）。`from` 含、`to` **不含**；`from >= to` 返回 `400` |
+| `page` / `size` | 0 / 20 | `size` 上限 100，超出按 100 处理 |
+
+计数口径：`deliveryCount = succeededCount + failedCount + inFlightCount`，其中 `failed` 含 `DEAD` 与 `CANCELED`，`inFlight` 含 `PENDING`/`DELIVERING`/`RETRY_WAIT`。三个计数由同一条 `LEFT JOIN ... GROUP BY` 算出，不是每行再查一次。
+
+**为什么不是 WebSocket**：事件流要的是"最近 N 条 + 翻页"，轮询一条 SQL 比给每个浏览器连接维护订阅、背压和重连语义便宜得多。真需要推送时再加，接口形状不变。
 
 ### GET /v1/events/{id}
 
@@ -237,9 +441,19 @@ curl -X POST localhost:8080/v1/events/batch \
 
 ## Delivery
 
-### GET /v1/deliveries?eventId=&status=&page=0&size=20
+### GET /v1/deliveries?eventId=&endpointId=&status=&from=&to=&page=0&size=20
 
-`status` 可选值：`PENDING` `DELIVERING` `RETRY_WAIT` `SUCCEEDED` `DEAD` `CANCELED`
+投递列表，按 id 倒序。所有筛选条件可组合：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `eventId` | — | 只看某个事件的投递 |
+| `endpointId` | — | 只看打到某个 Endpoint 的投递 |
+| `status` | — | 可选值：`PENDING` `DELIVERING` `RETRY_WAIT` `SUCCEEDED` `DEAD` `CANCELED`。**其他值返回 `400`**，不再静默返回空页 |
+| `from` / `to` | — | ISO-8601 本地时间（UTC），`from` 含、`to` 不含；`from >= to` 返回 `400` |
+| `page` / `size` | 0 / 20 | `size` 上限 100 |
+
+`status` 之所以改成严格校验：以前把它直接拼进 `WHERE`，写错一个字母得到的是空列表，看起来像"这个租户没有失败"而不是"参数写错了"。
 
 ### GET /v1/deliveries/{id}
 
@@ -308,6 +522,8 @@ curl -X POST localhost:8080/v1/events/batch \
 | `GET /actuator/health/readiness` | K8s readiness（含 MySQL/RabbitMQ 依赖） |
 | `GET /actuator/health/liveness` | K8s liveness |
 | `GET /actuator/prometheus` | Prometheus 指标 |
+| `GET /ui/` | 运营控制台（前端构建产物；`/ui/events` 等客户端路由由后端兜到 `index.html`） |
+| `GET /demo/` | 单机演示控制台（仅 `all` profile） |
 
 ## 接收方验签示例（Java）
 

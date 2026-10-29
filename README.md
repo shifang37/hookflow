@@ -101,6 +101,33 @@ HTTP API 提交事件）和一个**假客户接收方**（真 HTTP、自己验 H
 
 ---
 
+## 运营控制台：事件流、投递、租户、监控
+
+`/demo/` 是单机演示，`frontend/` 是给人日常用的那个界面：React 18 + TypeScript + Vite，
+Ant Design + React Query + Zustand + Recharts。五个页面都读前面那组接口：
+
+| 页面 | 数据来源 | 凭证 |
+|---|---|---|
+| 事件流（2 秒轮询） | `GET /v1/events` | 租户 API Key |
+| 投递（筛选 + 重放死信） | `GET /v1/deliveries` + `POST …/replay` | 租户 API Key |
+| Endpoints（新建 / 暂停 / 恢复） | `/v1/endpoints` | 租户 API Key（写操作要 `endpoint:write`） |
+| 租户（创建 / 统计 / 改策略 / Key 轮换） | `/v1/admin/tenants*`、`/tenants/{id}/keys` | Bootstrap Token |
+| 系统监控（吞吐折线 + 耗时分布 + 百分位） | `/v1/admin/overview`、`/metrics/timeseries`、`/metrics/latency` | Bootstrap Token |
+
+```bash
+./mvnw spring-boot:run          # 终端 1
+cd frontend && npm install && npm run dev   # 终端 2 → http://localhost:5173
+```
+
+首次打开会提示填凭证（右上角「凭证」）：租户 Key 用建租户响应里的 `apiKey`，运营令牌就是
+`hookflow.admin.bootstrap-token`。开发服务器把 `/v1` 代理到 8080，所以没有 base URL、也不用开 CORS。
+
+生产构建 `npm run build:backend` 会把产物复制到 `src/main/resources/static/ui/`，后端从 `/ui/`
+提供服务（客户端路由由 `UiForwardController` 兜到 `index.html`，刷新不会 404）。
+构建产物不入库，也不接进 `mvn package` —— 理由和取舍写在 [frontend/README.md](frontend/README.md)。
+
+---
+
 ## 60 秒跑通
 
 ```bash
@@ -487,7 +514,9 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 **当前限制（不掩饰）**：
 
 - 单 region、单 MySQL 主库，没有分片
-- 管理端只有 REST，没有 UI；没有 SDK
+- 没有 SDK（Java / Python）
+- 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 管理、监控，
+  但 **Endpoint 删除、事件详情、批量重放**还缺——剩余清单见 [docs/next-steps.md](docs/next-steps.md)
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）

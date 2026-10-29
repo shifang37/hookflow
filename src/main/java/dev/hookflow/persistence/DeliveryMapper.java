@@ -106,23 +106,48 @@ public interface DeliveryMapper {
     @Select("<script>"
             + "SELECT * FROM delivery WHERE tenant_id = #{tenantId}"
             + "<if test='eventId != null'> AND event_id = #{eventId}</if>"
+            + "<if test='endpointId != null'> AND endpoint_id = #{endpointId}</if>"
             + "<if test='status != null'> AND status = #{status}</if>"
+            + "<if test='fromTime != null'> AND created_at &gt;= #{fromTime}</if>"
+            + "<if test='toTime != null'> AND created_at &lt; #{toTime}</if>"
             + " ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}"
             + "</script>")
     List<Delivery> list(@Param("tenantId") long tenantId,
                         @Param("eventId") Long eventId,
+                        @Param("endpointId") Long endpointId,
                         @Param("status") String status,
+                        @Param("fromTime") java.time.LocalDateTime fromTime,
+                        @Param("toTime") java.time.LocalDateTime toTime,
                         @Param("limit") int limit,
                         @Param("offset") int offset);
 
     @Select("<script>"
             + "SELECT COUNT(*) FROM delivery WHERE tenant_id = #{tenantId}"
             + "<if test='eventId != null'> AND event_id = #{eventId}</if>"
+            + "<if test='endpointId != null'> AND endpoint_id = #{endpointId}</if>"
             + "<if test='status != null'> AND status = #{status}</if>"
+            + "<if test='fromTime != null'> AND created_at &gt;= #{fromTime}</if>"
+            + "<if test='toTime != null'> AND created_at &lt; #{toTime}</if>"
             + "</script>")
     long count(@Param("tenantId") long tenantId,
                @Param("eventId") Long eventId,
-               @Param("status") String status);
+               @Param("endpointId") Long endpointId,
+               @Param("status") String status,
+               @Param("fromTime") java.time.LocalDateTime fromTime,
+               @Param("toTime") java.time.LocalDateTime toTime);
+
+    /**
+     * Unfiltered-by-endpoint/time overload, kept because the state-machine tests use
+     * it to look up what they just created; all of them pass {@code null} for the
+     * filters this shorthand drops.
+     */
+    default List<Delivery> list(long tenantId, Long eventId, String status, int limit, int offset) {
+        return list(tenantId, eventId, null, status, null, null, limit, offset);
+    }
+
+    default long count(long tenantId, Long eventId, String status) {
+        return count(tenantId, eventId, null, status, null, null);
+    }
 
     /**
      * Claim one delivery for one attempt.

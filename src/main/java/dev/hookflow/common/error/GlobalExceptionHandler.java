@@ -16,7 +16,20 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
 
-/** Maps every exception that reaches MVC onto the documented error body. */
+/**
+ * Maps every exception that reaches MVC onto the documented error body.
+ *
+ * <p><b>{@code DuplicateKeyException} is deliberately not handled here.</b> A generic
+ * "conflict" would be wrong for the one path that relies on it escaping: ingest catches
+ * its own duplicate-key race (two concurrent requests with the same idempotency key) and
+ * rethrows when the winning row is no longer readable. That case has to stay a 500 —
+ * answering "conflict" would tell the client not to retry a request that is safe to
+ * retry, and it is not a resource the client asked for twice.
+ *
+ * <p>The two operations where a duplicate really is the caller's doing — a tenant name
+ * and a callback URL — translate it themselves so the message can name what collided:
+ * {@code AdminController.provisionTenant} and {@code EndpointService.create}.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 

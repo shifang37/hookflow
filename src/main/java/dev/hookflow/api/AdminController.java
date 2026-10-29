@@ -2,15 +2,16 @@ package dev.hookflow.api;
 
 import dev.hookflow.api.dto.Dtos.ProvisionTenantRequest;
 import dev.hookflow.api.dto.Dtos.ProvisionTenantResponse;
+import dev.hookflow.common.auth.BootstrapTokenGuard;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
-import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.persistence.ApiKeyMapper;
 import dev.hookflow.persistence.TenantMapper;
 import dev.hookflow.service.ApiKeyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,9 +21,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 
 /**
  * Operator-only provisioning.
@@ -42,16 +40,16 @@ public class AdminController {
     private final TenantMapper tenantMapper;
     private final ApiKeyMapper apiKeyMapper;
     private final ApiKeyService apiKeyService;
-    private final HookFlowProperties properties;
+    private final BootstrapTokenGuard bootstrapTokenGuard;
 
     public AdminController(TenantMapper tenantMapper,
                            ApiKeyMapper apiKeyMapper,
                            ApiKeyService apiKeyService,
-                           HookFlowProperties properties) {
+                           BootstrapTokenGuard bootstrapTokenGuard) {
         this.tenantMapper = tenantMapper;
         this.apiKeyMapper = apiKeyMapper;
         this.apiKeyService = apiKeyService;
-        this.properties = properties;
+        this.bootstrapTokenGuard = bootstrapTokenGuard;
     }
 
     @PostMapping("/tenants")
@@ -61,7 +59,7 @@ public class AdminController {
     public ProvisionTenantResponse provisionTenant(
             @RequestHeader("X-Bootstrap-Token") String bootstrapToken,
             @RequestBody ProvisionTenantRequest request) {
-        verify(bootstrapToken);
+        bootstrapTokenGuard.verify(bootstrapToken);
         if (request.name() == null || request.name().isBlank() || request.name().length() > 64) {
             throw ApiException.invalid("name is required and must be at most 64 characters");
         }
@@ -69,10 +67,17 @@ public class AdminController {
         if (rateLimit < 0) {
             throw ApiException.invalid("rateLimit must be >= 0");
         }
-        tenantMapper.insert(request.name(), rateLimit);
+        try {
+            tenantMapper.insert(request.name(), rateLimit);
+        } catch (DuplicateKeyException alreadyExists) {
+            // uk_tenant_name. Same reasoning as endpoint creation: translated at the one
+            // place that can produce it, not by a global DuplicateKeyException handler,
+            // because the ingest path's duplicate is a different situation entirely.
+            throw new ApiException(ErrorCode.ALREADY_EXISTS,
+                    "tenant name already exists: " + request.name());
+        }
         var tenant = tenantMapper.findByName(request.name())
                 .orElseThrow(() -> new IllegalStateException("tenant insert did not persist"));
-
         if (request.maxInFlight() != null || request.weight() != null) {
             int maxInFlight = request.maxInFlight() == null ? tenant.maxInFlight() : request.maxInFlight();
             int weight = request.weight() == null ? tenant.weight() : request.weight();
@@ -94,7 +99,7 @@ public class AdminController {
     @Operation(summary = "Issue an additional API key for an existing tenant")
     public ProvisionTenantResponse issueKey(@RequestHeader("X-Bootstrap-Token") String bootstrapToken,
                                             @PathVariable long tenantId) {
-        verify(bootstrapToken);
+        bootstrapTokenGuard.verify(bootstrapToken);
         var tenant = tenantMapper.findById(tenantId)
                 .orElseThrow(() -> ApiException.notFound("Tenant"));
         ApiKeyService.IssuedKey key = apiKeyService.issue(tenantId, DEFAULT_SCOPES);
@@ -106,20 +111,7 @@ public class AdminController {
     @Operation(summary = "Revoke an API key")
     public void revoke(@RequestHeader("X-Bootstrap-Token") String bootstrapToken,
                        @PathVariable long apiKeyId) {
-        verify(bootstrapToken);
+        bootstrapTokenGuard.verify(bootstrapToken);
         apiKeyService.revoke(apiKeyId);
-    }
-
-    private void verify(String provided) {
-        String expected = properties.admin() == null ? null : properties.admin().bootstrapToken();
-        if (expected == null || expected.isBlank()) {
-            throw new ApiException(ErrorCode.FORBIDDEN, "Admin API is not configured");
-        }
-        boolean match = MessageDigest.isEqual(
-                expected.getBytes(StandardCharsets.UTF_8),
-                (provided == null ? "" : provided).getBytes(StandardCharsets.UTF_8));
-        if (!match) {
-            throw new ApiException(ErrorCode.FORBIDDEN, "Invalid bootstrap token");
-        }
     }
 }

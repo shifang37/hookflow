@@ -4,18 +4,22 @@ import dev.hookflow.api.dto.Dtos.CreateEventBatchItem;
 import dev.hookflow.api.dto.Dtos.CreateEventBatchRequest;
 import dev.hookflow.api.dto.Dtos.CreateEventRequest;
 import dev.hookflow.api.dto.Dtos.EventResponse;
+import dev.hookflow.api.dto.Dtos.EventSummaryResponse;
 import dev.hookflow.common.auth.ApiKeyPrincipal;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
+import dev.hookflow.common.web.PageResponse;
 import dev.hookflow.domain.tenant.Tenant;
 import dev.hookflow.ratelimit.TenantRateLimiter;
 import dev.hookflow.service.EventIngestService;
+import dev.hookflow.service.ReportService;
 import dev.hookflow.service.TenantService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,9 +28,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -55,17 +61,41 @@ public class EventController {
     private final TenantRateLimiter rateLimiter;
     private final dev.hookflow.backpressure.BacklogGate backlogGate;
     private final ObjectMapper objectMapper;
+    private final ReportService reportService;
 
     public EventController(EventIngestService ingestService,
                            TenantService tenantService,
                            TenantRateLimiter rateLimiter,
                            dev.hookflow.backpressure.BacklogGate backlogGate,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           ReportService reportService) {
         this.ingestService = ingestService;
         this.tenantService = tenantService;
         this.rateLimiter = rateLimiter;
         this.backlogGate = backlogGate;
         this.objectMapper = objectMapper;
+        this.reportService = reportService;
+    }
+
+    /**
+     * The console's event stream: newest first, one row per event with its delivery
+     * roll-up, so the table does not need a follow-up request per row.
+     *
+     * <p>{@code from}/{@code to} are ISO-8601 local date-times interpreted as UTC
+     * (the same clock the rest of the API reports). {@code to} is exclusive.
+     */
+    @GetMapping
+    @Operation(summary = "List events newest-first, each with its delivery counters")
+    public PageResponse<EventSummaryResponse> list(
+            @RequestParam(required = false) String eventType,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        long tenantId = ApiKeyPrincipal.Context.requireTenantId();
+        return reportService.listEvents(tenantId, eventType, from, to, page, size);
     }
 
     /**

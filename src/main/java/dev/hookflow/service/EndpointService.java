@@ -2,12 +2,14 @@ package dev.hookflow.service;
 
 import dev.hookflow.common.RetryOnLockConflict;
 import dev.hookflow.common.error.ApiException;
+import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.crypto.SecretCipher;
 import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.persistence.AuditLogMapper;
 import dev.hookflow.persistence.DeliveryMapper;
 import dev.hookflow.persistence.EndpointMapper;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -86,8 +88,17 @@ public class EndpointService {
         random.nextBytes(secret);
         byte[] cipher = secretCipher.encrypt(secret);
 
-        endpointMapper.insert(tenantId, url, cipher, secretCipher.keyVersion(), types, attempts,
-                concurrency);
+        try {
+            endpointMapper.insert(tenantId, url, cipher, secretCipher.keyVersion(), types, attempts,
+                    concurrency);
+        } catch (DuplicateKeyException alreadyExists) {
+            // uk_endpoint_tenant_url. Translated here rather than in a global handler on
+            // purpose: the ingest path lets its own DuplicateKeyException reach the 500
+            // handler (a lost idempotency race is not a conflict the caller can act on),
+            // so a blanket mapping would silently change that documented behaviour.
+            throw new ApiException(ErrorCode.ALREADY_EXISTS,
+                    "an endpoint with this url already exists: " + url);
+        }
         Endpoint endpoint = endpointMapper.findByTenantAndUrl(tenantId, url)
                 .orElseThrow(() -> new IllegalStateException("endpoint insert did not persist"));
         auditLogMapper.insert(tenantId, "api-key", "endpoint.create", "endpoint", endpoint.id(),

@@ -36,4 +36,24 @@ public interface TenantMapper {
     int updateBudget(@Param("id") long id,
                      @Param("maxInFlight") int maxInFlight,
                      @Param("weight") int weight);
+
+    /**
+     * Writes the whole policy row at once.
+     *
+     * <p>Full-row rather than one statement per changed field: the caller has already
+     * read the row, merged the partial update into it and validated the result, so a
+     * per-field {@code UPDATE} would only reopen a window where two concurrent patches
+     * interleave and the last writer silently loses the other's field.
+     */
+    @Update("""
+            UPDATE tenant
+               SET rate_limit = #{rateLimit},
+                   max_in_flight = #{maxInFlight},
+                   weight = #{weight}
+             WHERE id = #{id}
+            """)
+    int updateConfig(@Param("id") long id,
+                     @Param("rateLimit") int rateLimit,
+                     @Param("maxInFlight") int maxInFlight,
+                     @Param("weight") int weight);
 }

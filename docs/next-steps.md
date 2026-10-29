@@ -1,0 +1,217 @@
+# 交接文档：做到了哪一步，剩下什么
+
+> 这份文档是给**下一次对话**用的，假设读者没有任何上下文。
+> 它记录：当前已验证的状态、未完成任务的清单（含具体文件和坑）、以及环境上的注意事项。
+> 路线图本身在 [optimization-roadmap.md](optimization-roadmap.md)，这里只记「已经做了什么」和「接下来做什么」。
+
+---
+
+## 1. 一句话现状
+
+HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障演练），这一轮补的是**产品化**部分：
+
+- 后端补了一组**运营控制台的读接口**（事件流、租户统计、时间序列、延迟分布、API Key 列表）
+- 数据库加了一条图表用的索引
+- 前端从零搭了一个 **React 18 + TypeScript 运营控制台**，五个页面全部接真实接口
+
+**没有提交到 git**。所有改动都在工作区里，见 §6。
+
+---
+
+## 2. 已验证的状态（这些数字可以复现）
+
+| 项 | 结果 | 怎么复现 |
+|---|---|---|
+| 后端单测 | **154 个通过** | `./mvnw -o test` |
+| 后端集成测试 | **58 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
+| 前端单测 | **60 个通过** | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 83.63% / 分支 82.35% / 函数 49.71% | `npm run test:coverage` |
+| 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
+| 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
+
+前端构建产物会复制到 `src/main/resources/static/ui/`（已在 `.gitignore` 里，不入库）。
+后端从 `/ui/` 提供这个控制台，`/ui/events` 这类客户端路由由 `UiForwardController` 兜到 `index.html`。
+
+---
+
+## 3. 这一轮新增了什么（按层次）
+
+### 后端
+
+| 文件 | 作用 |
+|---|---|
+| `api/AdminConsoleController.java` | 运营控制台读接口：租户列表/详情/统计、平台概览、时间序列、延迟分布、API Key 列表；外加 `PATCH /v1/admin/tenants/{id}` 改策略 |
+| `service/ReportService.java` | 读模型门面：分页裁剪、`range` 解析、成功率口径、分桶选择。**口径定义都在这里** |
+| `persistence/ReportMapper.java` | 报表 SQL（聚合/分桶/百分位）。刻意独立于 `DeliveryMapper`（那个是状态机 CAS） |
+| `persistence/ApiKeyQueryMapper.java` | Key 元数据列表。**SQL 里不出现 `key_hash`**，所以不可能漏出哈希 |
+| `common/auth/BootstrapTokenGuard.java` | 运营令牌校验，从 `AdminController` 抽出来给两个控制器共用 |
+| `config/UiForwardController.java` | `/ui/**` 的 SPA 回退（正则排除带点的资源路径） |
+| `resources/db/migration/V4__report_read_indexes.sql` | `idx_delivery_updated_status (updated_at, status)` |
+| `common/error/ErrorCode.java` | 新增 `40904 ALREADY_EXISTS` |
+
+### 前端（`frontend/`，33 个源文件）
+
+- `src/api/` — `client.ts`（两个信任域的请求头 + 统一 `ApiError`）、`queries.ts`（React Query hooks，轮询间隔集中一处）、`types.ts`（手写 wire 类型）、`time.ts`（UTC 时间格式化）、`auth.ts`（凭证存取）
+- `src/pages/` — 事件流、投递、Endpoints、租户、系统监控
+- `src/components/` — `AppShell`、`StatusTag`、`PageTitle`、`TokenDrawer`、`CredentialAlert`、`SecretRevealModal`
+- `vite.config.ts`、`tsconfig.json`、`eslint.config.js`、`tailwind.config.js`（`preflight: false`，因为 AntD v5 自带 reset）
+- `.github/workflows/ci.yml` 增加了 `frontend` job（typecheck / lint / test:coverage / build）
+
+### 文档
+
+- `docs/api.md` — 新增接口全部写进去了，含**口径表**（成功率怎么算、延迟含不含排队、积压为什么不带窗口）
+- `README.md` — 新增「运营控制台」一节
+- `frontend/README.md` — 前端怎么跑、为什么这么选、还没做什么
+
+---
+
+## 4. 未完成的任务
+
+按「值得先做」排序。每条都写了要改哪里、验收标准、以及已知的坑。
+
+### A. Endpoint 删除（后端 + 前端）
+
+**这是路线图 P0「所有 CRUD 通过 UI 完成」最后缺的一块**，而且缺在**后端**：现在只有 pause/resume，没有 DELETE。
+
+- 后端：加软删除。可复用 `deliveryMapper.cancelPendingForEndpoint(endpointId, tenantId)`（pause 已经在用）。
+  注意 `endpoint.status` 有 CHECK 约束 `ck_endpoint_status IN ('ACTIVE','PAUSED')`（V1），要么加 `DELETED`（**需要新的 V5 迁移改约束**），要么加 `deleted_at` 列并让 `listActiveByTenant`（fan-out 用）和列表查询都排除它。
+- 新增 `DELETE /v1/endpoints/{id}`；列表默认不返回已删除。
+- 前端：`EndpointsPage` 行操作加「删除」，Popconfirm 要写清「会取消未投递的投递，不可恢复」。
+- 验收：删除后 `GET /v1/endpoints/{id}` 返回 404；该 endpoint 的 PENDING/RETRY_WAIT 变 CANCELED；已被其它 endpoint 收下的投递不受影响；有 IT 覆盖。
+
+### B. 事件详情 + 批量重放
+
+- **事件详情**：`EventController.getEvent` 目前是占位实现——只返回 `EventResponse(eventId, 0, false)`，`deliveryCount` 恒为 0，也**不返回 payload**。
+  要做：新 DTO（`eventType` / `payload` / `createdAt` / 该事件的投递列表），前端点事件行开抽屉。注意 `Event.payload` 是**原始 JSON 字符串**（平台刻意不重序列化客户数据），前端要 `JSON.parse` 后格式化展示。
+- **批量重放**：后端只有单条 `POST /v1/deliveries/{id}/replay`。批量需要新接口（`POST /v1/deliveries/replay` 带 id 列表），逐条走现有 CAS，返回**部分成功**结果；只允许 DEAD，其余逐条报 `ILLEGAL_TRANSITION`。
+- 前端：事件表和投递表都加多选 + 「批量重放」。
+
+### C. 前端测试提速（纯工程）
+
+整套从 70s 涨到 **139s**（v8 覆盖率插桩后）。瓶颈是 `TenantsPage.test.tsx`：11 个用例、每个都渲染整页 + 抽屉 + 弹窗，一个文件占了一半时间。
+
+- 同一个文件里的用例只能串行。**按页面/主题拆文件**（如 `TenantsPage.keys.test.tsx` / `TenantsPage.create.test.tsx`）让 vitest 并行；
+  或 CI 里用 `vitest --shard`。
+- 不要去调 `testTimeout`（已经是 30s，`vite.config.ts` 里有原因说明）。
+- 目标：< 90s。
+
+### D. `TenantsPage.tsx` 拆分（纯重构）
+
+589 行，里面 5 个组件：页面、`TenantStatusTag`、`TenantDetailDrawer`、`TenantKeysCard`、`CreateTenantModal`。
+建议拆成 `components/TenantKeysCard.tsx` 和 `components/CreateTenantModal.tsx`。
+是纯搬移，测试只 import `TenantsPage`，行为不变。**做之前先做 C**，否则每次验证都要等 2 分钟。
+
+### E. `src/api` 的请求函数没有测试
+
+覆盖率里 `src/api` 只有 55.6%，因为只测了纯函数（`buildHeaders` / `toApiError`）；`api.*` 那 15 个请求函数没被断言。
+补的话用 `msw` 或 axios adapter，验证 URL、方法、请求头、参数序列化（尤其 `undefined` 不能变成 `?status=`）。
+
+### F. `topFailureReasons` 没有被真实死信覆盖
+
+`ReadApiIT` 里没有 DEAD 投递，所以 `ReportMapper.topFailureReasons` 只走了「无数据返回空列表」的路径，`LIMIT` 绑定没验证过。
+造 DEAD 需要故障注入（参考 `ReceiverFaultIT` 的模式）或直接写库。**这是目前唯一没有被真数据跑过的报表 SQL。**
+
+### G. 索引收益没有量化
+
+`V4` 加了 `idx_delivery_updated_status`，但没有前后对比数据。仓库里有 `tools/LoadGen` 和 `docs/perf/` 的结构，
+可以做一轮 before/after 把吞吐和图表查询延迟记进去。
+
+仍然没索引、且**迁移注释里写明了为什么先不加**的：
+- `event(created_at)` —— 平台级事件计数会全表扫，但 `event` 是写入最热的表
+- `delivery(created_at)` —— `stats`/`overview` 的窗口计数
+
+要加之前先读 `V4__report_read_indexes.sql` 顶部的注释，那里有完整取舍。
+
+### H. 路线图剩下的 P1/P2/P3
+
+`docs/optimization-roadmap.md` 里还有整块没动：
+
+| 项 | 状态 |
+|---|---|
+| P1 Java SDK | 文档里有完整代码草案，但仓库里**没有** `hookflow-java-sdk` 模块 |
+| P1 K8s / Helm | 完全没有 |
+| P1 Grafana 面板 | 完全没有（但延迟分布现在可以从 `/v1/admin/metrics/latency` 拿到） |
+| P2 CI/CD | 前端 job 已加；Docker 镜像、Helm 发布、Codecov 未做 |
+| P2 Python SDK | 没有 |
+| P3 性能优化（500 → 2000 events/s） | 没有 |
+
+⚠️ 路线图里 K8s 那节的 **actuator 端口**和 Grafana 那节的**指标名**之前是错的，已经修正过（端口统一 8080；
+指标名对齐了真实代码）。**别照着旧记忆写 9090 或在 PromQL 里用 `hookflow_deliveries_total`** —— 那个指标不存在。
+
+### I. 一些小的历史遗留
+
+- `AdminController` 里注入了 `ApiKeyMapper apiKeyMapper` 但从未使用（加 `ApiKeyQueryMapper` 之前就在）。
+- `EventController.getEvent` 的 `deliveryCount = 0` 是占位（见 B）。
+- 内置的 `/demo/` 控制台（`static/demo/`）和新的 `/ui/` 控制台并存，是两套东西：前者是单机自动演示，后者是运营工具。
+
+---
+
+## 5. 环境与工具链的坑（都是这一轮实际踩到的）
+
+**后端**
+
+- `./mvnw -o verify` 需要 **Docker Desktop 在跑**（Testcontainers 起 MySQL + RabbitMQ）。
+  本机镜像 `mysql:8.4` 和 `rabbitmq:4-management` 已经拉过。
+- 只跑某一个 IT（PowerShell 里**必须给属性加引号**，否则 Maven 把 `.test=X` 当成 lifecycle phase）：
+  ```powershell
+  .\mvnw.cmd -o test-compile failsafe:integration-test failsafe:verify "-Dit.test=ReadApiIT"
+  ```
+- 项目约定：`DeliveryMapper` 是**状态机**（每条 SQL 都是 CAS，测试可以依赖）；报表查询放 `ReportMapper`。
+  时间窗口一律用 MySQL 的 `NOW(3)` 算，不要用 JVM 时钟（`docs/failures/0002-two-clocks.md`）。
+
+**前端**
+
+- **`npm run build` 在这台机器上会失败**，报 esbuild 删不掉系统临时目录里的文件。
+  绕法：把临时目录指到工作区内再构建：
+  ```powershell
+  cd frontend
+  New-Item -ItemType Directory -Force .tmp | Out-Null
+  $env:TEMP = (Resolve-Path '.tmp').Path; $env:TMP = $env:TEMP
+  npm run build:backend
+  ```
+  （`.tmp/` 已在 `frontend/.gitignore` 里）
+- **不要用 PowerShell 的 `Get-Content`/`Set-Content` 改源码**：这一轮把 `EndpointsPage.test.tsx` 的
+  中文读成了乱码、文件变成非法 UTF-8。改文件用编辑工具，不要用 shell 重定向。
+- AntD 对**两个汉字**的按钮会自动插空格：`重放` 渲染成 `重 放`，`创建` 渲染成 `创 建`。
+  测试里用 `/重\s*放/`、`/^创\s*建$/` 这种写法。
+- RTL 的 `getByText` 只读元素的**直接文本节点**。`8 / 8` 这种跨 span 的文本匹配不到，
+  用 `expect(row).toHaveTextContent('8 / 8')`。
+- 覆盖率插桩会让 AntD + jsdom 的渲染慢 2–3 倍，`testTimeout` 因此是 30s。
+
+---
+
+## 6. 仓库现状：什么都没提交
+
+`git status`：**15 个修改 + 14 个未跟踪**，全部是这一轮的产物。要提交的话一次 commit 就够：
+
+```
+修改：.github/workflows/ci.yml  .gitignore  README.md  docs/api.md
+      api/{AdminController,DeliveryController,EventController,dto/Dtos}
+      common/error/{ErrorCode,GlobalExceptionHandler}
+      persistence/{DeliveryMapper,TenantMapper}
+      service/{DeliveryService,EndpointService,TenantService}
+
+新增：docs/optimization-roadmap.md        （用户写的路线图）
+      frontend/                            （整个前端，含 package-lock.json）
+      api/AdminConsoleController.java
+      common/auth/BootstrapTokenGuard.java
+      config/UiForwardController.java
+      persistence/{ApiKeyQueryMapper,ReportMapper}.java
+      service/ReportService.java
+      db/migration/V4__report_read_indexes.sql
+      test/.../config/UiForwardControllerTest.java
+      test/.../it/{ApiKeyConsoleIT,EndpointLifecycleIT,ReadApiIT}.java
+      test/.../service/ReportServiceTest.java
+```
+
+`.gitignore` 已经加好：`frontend/node_modules/`、`frontend/dist/`、`frontend/coverage/`、`frontend/.tmp/`、
+`src/main/resources/static/ui/`。
+
+---
+
+## 7. 建议的下一步
+
+1. **先提交**（§6），把这一轮固定下来，否则改坏了没有回退点。
+2. 然后按 **C → D**（测试提速 + 拆 `TenantsPage`）：这两件事让后面每一次改动都更快，属于投资。
+3. 再挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是验收标准，B 补的是日常排查最常用的两个操作。
+4. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。

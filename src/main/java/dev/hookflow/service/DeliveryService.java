@@ -11,6 +11,8 @@ import dev.hookflow.persistence.DeliveryMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 
 @Service
@@ -34,10 +36,39 @@ public class DeliveryService {
     public record Page(List<Delivery> items, long total) {
     }
 
-    public Page list(long tenantId, Long eventId, String status, int page, int size) {
+    /**
+     * @param endpointId optional; scopes the list to one callback target
+     * @param status     optional; must name a {@link DeliveryStatus} exactly
+     * @param from       optional inclusive lower bound on {@code created_at}
+     * @param to         optional exclusive upper bound on {@code created_at}
+     */
+    public Page list(long tenantId, Long eventId, Long endpointId, String status,
+                     LocalDateTime from, LocalDateTime to, int page, int size) {
+        if (from != null && to != null && !from.isBefore(to)) {
+            throw ApiException.invalid("from must be before to");
+        }
+        String normalizedStatus = requireKnownStatus(status);
         return new Page(
-                deliveryMapper.list(tenantId, eventId, status, size, page * size),
-                deliveryMapper.count(tenantId, eventId, status));
+                deliveryMapper.list(tenantId, eventId, endpointId, normalizedStatus, from, to,
+                        size, page * size),
+                deliveryMapper.count(tenantId, eventId, endpointId, normalizedStatus, from, to));
+    }
+
+    /**
+     * An unknown status used to be passed straight into the {@code WHERE} clause and
+     * quietly returned an empty page, which reads as "this tenant has no failures"
+     * rather than "you typed it wrong". Rejecting it is the whole point of having a
+     * closed enum.
+     */
+    private static String requireKnownStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        try {
+            return DeliveryStatus.valueOf(status).name();
+        } catch (IllegalArgumentException unknown) {
+            throw ApiException.invalid("status must be one of " + Arrays.toString(DeliveryStatus.values()));
+        }
     }
 
     public Delivery require(long tenantId, long deliveryId) {

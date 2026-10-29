@@ -29,3 +29,12 @@ bench-results/
 
 ### jqwik seed database ###
 .jqwik-database
+
+### Frontend ###
+# Build output, not source. `cd frontend && npm run build:backend` regenerates it,
+# and committing hashed bundles means a merge conflict in a minified file.
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.tmp/
+src/main/resources/static/ui/

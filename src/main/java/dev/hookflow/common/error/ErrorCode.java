@@ -18,6 +18,15 @@ public enum ErrorCode {
     IDEMPOTENCY_KEY_REUSED(40901, HttpStatus.CONFLICT, "Idempotency key already used with a different payload"),
     ENDPOINT_PAUSED(40902, HttpStatus.CONFLICT, "Endpoint is paused"),
     ILLEGAL_TRANSITION(40903, HttpStatus.CONFLICT, "Delivery is not in a state that allows this operation"),
+    /**
+     * A uniqueness constraint refused the write: a tenant name, or a callback URL that
+     * this tenant already registered.
+     *
+     * <p>Deliberately not the answer for a lost idempotency race on the ingest path —
+     * that one stays a 500, because "conflict" would tell the client not to retry a
+     * request it can safely retry. See {@code EventIngestService.ingest}.
+     */
+    ALREADY_EXISTS(40904, HttpStatus.CONFLICT, "Resource already exists"),
     RATE_LIMITED(42900, HttpStatus.TOO_MANY_REQUESTS, "Tenant rate limit exceeded"),
     /**
      * This tenant's own un-published backlog is above its watermark, so accepting

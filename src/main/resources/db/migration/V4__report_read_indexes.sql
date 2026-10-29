@@ -1,0 +1,52 @@
+-- =====================================================================
+-- HookFlow v0.4 schema: index the settlement axis the charts read.
+--
+-- The console charts (GET /v1/admin/metrics/timeseries) answer "how much
+-- work finished in each bucket" with:
+--
+--   SELECT ... FROM delivery
+--    WHERE updated_at >= ? AND updated_at < ?
+--      AND status IN ('SUCCEEDED', 'DEAD', 'CANCELED')
+--    GROUP BY FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(updated_at) / ?) * ?)
+--
+-- Nothing in V1-V3 supports that predicate. The existing delivery indexes are
+-- all keyed on status + a scheduling column (idx_delivery_due,
+-- idx_delivery_lease), on endpoint (idx_delivery_endpoint_status) or on tenant
+-- (idx_delivery_tenant_status); a window over updated_at fell through to a full
+-- table scan, once per chart refresh, per open browser tab.
+--
+-- Column order is (range column, filter column): updated_at first so the
+-- platform-wide chart (no tenant filter) can range-scan, status second so the
+-- terminal-state filter is answered from the index instead of by fetching every
+-- in-flight row that also churned its updated_at inside the window.
+--
+-- ---------------------------------------------------------------------
+-- The cost, stated plainly
+-- ---------------------------------------------------------------------
+-- updated_at is ON UPDATE CURRENT_TIMESTAMP, so every state transition rewrites
+-- this index entry: claim, settle, retry. That is write amplification on the
+-- busiest update path in the system, accepted here because the alternative is a
+-- full table scan on a read path the console hits every few seconds.
+--
+-- If docs/perf/ ever shows this on the hot path, the right fix is not a better
+-- index but a better column: a `settled_at` DATETIME(3) stamped once at the
+-- terminal transition, indexed by itself. It would be exact (updated_at is only
+-- a proxy for settle time: replay rewrites it) and would stop churning on
+-- claims and retries. It needs a backfill and a code change in DeliveryMapper,
+-- so it is deliberately not bundled into an index migration.
+--
+-- ---------------------------------------------------------------------
+-- Deliberately not added
+-- ---------------------------------------------------------------------
+-- event (created_at) would speed up the platform-wide event counter, but event
+-- is the ingest hot path (one insert per accepted event) and a dashboard count
+-- can afford a scan. Adding write cost to ingest to make a chart faster is the
+-- wrong trade; see docs/performance.md.
+--
+-- delivery (created_at) has the same shape of problem and the same answer: the
+-- window counts that use it (stats, overview) are already served acceptably by
+-- the status-leading indexes for the tenant-scoped case.
+-- =====================================================================
+
+ALTER TABLE delivery
+    ADD KEY idx_delivery_updated_status (updated_at, status);
