@@ -25,7 +25,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 后端单测 | **154 个通过** | `./mvnw -o test` |
 | 后端集成测试 | **58 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
 | 前端单测 | **60 个通过**，32.3s | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 83.63% / 分支 82.35% / 函数 49.71%，70.4s | `npm run test:coverage` |
+| 前端覆盖率 | 语句 83.75% / 分支 82.35% / 函数 49.71%，约 69s | `npm run test:coverage` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -113,11 +113,24 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 **下一个瓶颈**（想再往下压才需要动）：`EndpointsPage.test.tsx` 现在插桩后 62.5s，
 `TenantsPage.keys` / `.create` 也还在 52–59s 区间——要再快就按同样办法拆这两个。
 
-### D. `TenantsPage.tsx` 拆分（纯重构）
+### D. `TenantsPage.tsx` 拆分（纯重构）—— 已完成
 
-589 行，里面 5 个组件：页面、`TenantStatusTag`、`TenantDetailDrawer`、`TenantKeysCard`、`CreateTenantModal`。
-建议拆成 `components/TenantKeysCard.tsx` 和 `components/CreateTenantModal.tsx`。
-是纯搬移，测试只 import `TenantsPage`，行为不变。**C 已做完**（验证一次 70s / 32s，不再要等 2 分钟），可以直接开工。
+原来 590 行 5 个组件，现在：
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `pages/TenantsPage.tsx` | 194 | 页面：搜索、表格列、头部动作、创建后的 SecretRevealModal |
+| `components/TenantDetailDrawer.tsx` | 157 | 抽屉：Descriptions + 四个统计 + Top 失败原因 + 策略表单 |
+| `components/TenantKeysCard.tsx` | 112 | Key 列表、签发、撤销确认 |
+| `components/CreateTenantModal.tsx` | 121 | 创建表单 + 与后端一致的默认值（100 / 32 / 1） |
+| `components/StatusTag.tsx` | 91 → 100 | 新增 `TenantStatusTag`，和 `EndpointStatusTag` 放在同一份状态词表里 |
+
+纯搬移：没有改 JSX、没有改 props、没有改测过的文案；`TenantStatusTag` 放进了 `StatusTag.tsx`
+而不是新建文件，因为那个模块本来就是「状态长什么样」的唯一出处，页面和抽屉都要用它。
+
+验证：`tsc --noEmit` / `eslint` 干净，60 个用例全过，`npm run build:backend` 通过
+（app chunk 仍 ~51 kB），覆盖率文件和数字无意外变化。测试仍然只 import `TenantsPage`，
+所以这次重构没有碰任何测试文件。
 
 ### E. `src/api` 的请求函数没有测试
 
@@ -248,5 +261,6 @@ ae43506 feat: operator console - admin read API and a React UI
 
 1. ~~先提交~~ —— 已完成：`ae43506`，工作区干净。
 2. ~~C：前端测试提速~~ —— 已完成：139s → 70.4s（`npm test` 59.8s → 32.3s），见 §4C。
-3. 现在做 **D**（拆 `TenantsPage.tsx`，纯重构），然后挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是验收标准，B 补的是日常排查最常用的两个操作。
-4. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。
+3. ~~D：拆 `TenantsPage.tsx`~~ —— 已完成，见 §4D。
+4. 下一步挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是路线图 P0 的验收标准，B 补的是日常排查最常用的两个操作。
+5. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。

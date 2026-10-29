@@ -1,5 +1,5 @@
 import { Badge, Space, Tag, Tooltip } from 'antd'
-import type { DeliveryStatus, EndpointStatus, EventSummary } from '@/api/types'
+import type { DeliveryStatus, EndpointStatus, EventSummary, TenantStatus } from '@/api/types'
 
 /**
  * Status vocabulary in one place.
@@ -88,4 +88,14 @@ export function EndpointStatusTag({ status }: { status: EndpointStatus }) {
   ) : (
     <Tag color="warning">已暂停</Tag>
   )
+}
+
+/**
+ * Suspended is red rather than grey, and the API cannot produce this state: `PATCH
+ * /v1/admin/tenants/{id}` only takes rate limit, budget and weight, so a tenant showing
+ * `SUSPENDED` was changed out of band. It is not cosmetic either — `TenantService
+ * .requireActive` rejects that tenant's event submissions with a 403.
+ */
+export function TenantStatusTag({ status }: { status: TenantStatus }) {
+  return status === 'ACTIVE' ? <Tag color="success">启用</Tag> : <Tag color="error">停用</Tag>
 }

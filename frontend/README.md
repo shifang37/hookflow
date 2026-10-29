@@ -53,8 +53,11 @@ src/
 │   ├── time.ts       # 时间与数字格式化（后端时间是 UTC 无时区）
 │   ├── auth.ts       # 凭证存取（localStorage 优先于构建时默认值）
 │   └── types.ts      # 手写的 wire 类型，逐个对应后端 DTO
-├── components/       # AppShell / StatusTag / PageTitle / TokenDrawer / CredentialAlert
-├── pages/            # 四个页面
+├── components/       # 跨页组件 + 每页自己的抽屉/弹窗
+│   ├── AppShell.tsx / StatusTag.tsx / PageTitle.tsx / TokenDrawer.tsx
+│   ├── CredentialAlert.tsx / SecretRevealModal.tsx
+│   └── TenantDetailDrawer.tsx / TenantKeysCard.tsx / CreateTenantModal.tsx
+├── pages/            # 五个页面（租户页只留表格与头部动作）
 ├── stores/uiStore.ts # 时间窗口、凭证抽屉
 ├── test/setup.ts     # jsdom 缺口（matchMedia、ResizeObserver、getComputedStyle）
 ├── test/tenantFixtures.ts  # 租户页三个测试文件共用的夹具与 mock 默认值
