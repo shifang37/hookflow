@@ -13,12 +13,14 @@ import dev.hookflow.persistence.DeliveryMapper;
 import dev.hookflow.persistence.EndpointMapper;
 import dev.hookflow.persistence.EventMapper;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.UUID;
 
 /**
@@ -54,6 +56,16 @@ public class DeliveryProcessor {
     private final HookFlowProperties properties;
     private final MeterRegistry meterRegistry;
     private final AdmissionControl admission;
+    /**
+     * One HTTP attempt, from "about to call the receiver" to "settled".
+     *
+     * <p>{@code publishPercentileHistogram()} makes Micrometer/Actuator emit
+     * {@code hookflow_delivery_duration_seconds_bucket}, which is what lets
+     * Grafana compute p50/p95/p99 over a chosen window instead of only an average.
+     * The buckets are cheap relative to one outbound HTTP call and bounded in
+     * cardinality because the timer has no per-endpoint tags.
+     */
+    private final Timer deliveryTimer;
 
     public DeliveryProcessor(DeliveryMapper deliveryMapper,
                              DeliveryAttemptMapper attemptMapper,
@@ -73,6 +85,10 @@ public class DeliveryProcessor {
         this.properties = properties;
         this.meterRegistry = meterRegistry;
         this.admission = admission;
+        this.deliveryTimer = Timer.builder("hookflow.delivery.duration")
+                .description("Time spent on one outbound webhook attempt, including the receiver's response")
+                .publishPercentileHistogram()
+                .register(meterRegistry);
     }
 
     /**
@@ -130,12 +146,17 @@ public class DeliveryProcessor {
             return true;
         }
 
+        // Denominator for the success-rate panels: one increment per attempt that
+        // actually reaches the network. Claims that end without a call (paused or
+        // deleted endpoint, missing parent) are deliberately not counted here.
+        meterRegistry.counter("hookflow.delivery.attempted").increment();
         HttpDeliverer.Outcome outcome = deliverer.deliver(endpoint, event, delivery, message.attemptNo());
         settle(delivery, message.attemptNo(), leaseToken, outcome);
         return true;
     }
 
     private void settle(Delivery delivery, int attemptNo, String leaseToken, HttpDeliverer.Outcome outcome) {
+        deliveryTimer.record(Duration.ofMillis(outcome.durationMs()));
         transactionTemplate.executeWithoutResult(status -> {
             if (outcome.success()) {
                 attemptMapper.finish(delivery.id(), attemptNo, DeliveryAttempt.SUCCEEDED,

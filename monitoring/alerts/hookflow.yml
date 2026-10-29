@@ -1,0 +1,53 @@
+groups:
+  - name: hookflow-delivery
+    interval: 15s
+    rules:
+      # "The outbox is not draining" is the leading indicator of a delivery
+      # outage: relay or workers are behind, and once the backlog reaches the
+      # 100000 watermark ingest starts returning 503. Warning at 1000 leaves time
+      # to look before customers feel it.
+      - alert: HookFlowOutboxBacklogGrowing
+        expr: |
+          (sum(hookflow_outbox_backlog) > 1000)
+          and
+          (deriv(sum(hookflow_outbox_backlog)[10m:15s]) > 0)
+        for: 2m
+        labels:
+          severity: warning
+          service: hookflow
+        annotations:
+          summary: "HookFlow outbox backlog is above 1000 and still growing"
+          description: >-
+            The relay/worker pipeline is falling behind: the outbox backlog has
+            been over 1000 for 2 minutes and its 10-minute derivative is positive.
+            Check hookflow.outbox.publish_failed / publish_rejected, the broker
+            queue depth, and worker saturation before the platform watermark
+            (100000) turns this into 503s for every tenant.
+
+      # Terminal deliveries, not attempts: a dead delivery consumed up to
+      # maxAttempts retries, so dividing by hookflow_delivery_attempted_total
+      # makes an outage look like 1/8 = 12% even when every delivery is dying.
+      # succeeded + dead is the set of deliveries that reached a terminal state;
+      # retry_scheduled is deliberately excluded because it is not an outcome yet.
+      - alert: HookFlowDeadLetterRateHigh
+        expr: |
+          sum(rate(hookflow_delivery_dead_total[2m]))
+          /
+          clamp_min(
+            sum(rate(hookflow_delivery_dead_total[2m]))
+              + sum(rate(hookflow_delivery_succeeded_total[2m])),
+            1e-9)
+          > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: hookflow
+        annotations:
+          summary: "HookFlow dead-letter rate is above 10%"
+          description: >-
+            More than 10% of deliveries that reached a terminal state in the last
+            2 minutes ended in DEAD (not retryable or retry budget exhausted).
+            Check the receiver (status code and error class in the delivery
+            detail), then replay the dead letters once it is healthy. A paused or
+            deleted endpoint cancels deliveries instead of dead-lettering them, so
+            this is a real receiver or platform failure.

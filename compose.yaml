@@ -120,6 +120,56 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # Observability stack, its own profile: `docker compose up -d` must stay the
+  # three-dependency demo, and the app can run on the host while these scrape it.
+  #
+  #   docker compose --profile monitoring up -d
+  #   http://localhost:3000   Grafana (admin / hookflow; override GRAFANA_PASSWORD)
+  #   http://localhost:9090   Prometheus (targets, /alerts, /rules)
+  #
+  # Prometheus scrapes host.docker.internal:8080. That reaches the app whether it
+  # runs with `mvn spring-boot:run` or in the compose `full` profile, because both
+  # publish 8080 on the host. See docs/monitoring.md.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: hookflow-prometheus
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Docker Desktop already provides this name; the explicit mapping makes the
+      # same compose file work on Linux, where host-gateway is the supported way
+      # to reach a service running outside the container network.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: hookflow-grafana
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-hookflow}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/hookflow-overview.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   mysql-data:
   rabbit-data:
+  prometheus-data:
+  grafana-data:

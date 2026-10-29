@@ -1643,6 +1643,12 @@ helm uninstall hookflow --namespace hookflow
 
 ## P1：监控面板
 
+> **状态（2026-10-29）**：已完成。Prometheus + Grafana 走 compose 的 `monitoring` profile，
+> 3 个预装面板（概览 / 投递详情 / JVM 与资源）和 2 条告警规则；两个指标缺口已补齐：
+> `hookflow.delivery.duration`（Timer + percentile histogram）与
+> `hookflow.delivery.attempted`（成功率分母）。怎么起、每个面板的口径、告警怎么响见
+> [monitoring.md](monitoring.md)。
+
 ### 现状问题
 
 - Prometheus 指标已暴露，但没有可视化
@@ -1702,17 +1708,13 @@ hookflow_outbox_backlog
 > 经 Prometheus registry 输出后变成下划线并给计数器补 `_total`
 > （`hookflow_delivery_succeeded_total`）。查询时以 Prometheus 侧的名字为准。
 >
-> **延迟直方图的缺口**：目前代码里没有任何 Timer/直方图，
-> `hookflow_delivery_duration_seconds_bucket` **还不存在** —— 投递耗时只写进了
-> `delivery_attempts.duration_ms`，端到端延迟在 `DemoMapper` 里用 `TIMESTAMPDIFF` 现算。
-> 做 P95 面板前需二选一：
-> 1. 在 `DeliveryProcessor` 加 `Timer.builder("hookflow.delivery.duration").publishPercentileHistogram()`，
->    产出 `hookflow_delivery_duration_seconds_bucket`；
-> 2. 或改走 DB 聚合接口（`DemoController` 已有百分位计算可复用）。
+> **延迟直方图（已补）**：`DeliveryProcessor` 现在注册
+> `Timer.builder("hookflow.delivery.duration").publishPercentileHistogram()`，每次 settle 记录一次，
+> Prometheus 侧产出 `hookflow_delivery_duration_seconds_bucket`。
 >
-> **总投递数缺口**：也没有 `hookflow_delivery_total` 之类的分母计数器，
-> 所以成功率只能按「已结算」口径算。若要真正的「成功 / 总投递」，
-> 需先在 `DeliveryProcessor` 增加 `hookflow.delivery.attempted` 计数器。
+> **总投递数（已补）**：`hookflow.delivery.attempted` 在每次真正发出 HTTP 的尝试前 +1，作为
+> 「尝试成功率」的分母。注意它**不是**终态投递数：一次死信会消耗最多 8 次尝试，所以死信率用
+> `dead / (dead + succeeded)`，不用 `attempted` 作分母。
 
 #### 面板 2：投递详情
 
@@ -1741,10 +1743,10 @@ hookflow_outbox_backlog
 
 ### 验收标准
 
-- [ ] 至少 3 个 Grafana 仪表板
-- [ ] 包含预构建的 JSON 配置（开箱即用）
-- [ ] 至少 2 条告警规则
-- [ ] 有监控搭建文档
+- [x] 至少 3 个 Grafana 仪表板（概览 / 投递详情 / JVM 与资源，JSON 在 `monitoring/grafana/dashboards/`）
+- [x] 包含预构建的 JSON 配置（开箱即用，数据源用 `${DS_PROMETHEUS}` 变量）
+- [x] 至少 2 条告警规则（outbox 积压持续增长、死信率 > 10%）
+- [x] 有监控搭建文档（[monitoring.md](monitoring.md)）
 
 ---
 

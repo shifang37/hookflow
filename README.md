@@ -418,6 +418,8 @@ GET /actuator/prometheus
 | `hookflow.delivery.succeeded` | 成功投递数 |
 | `hookflow.delivery.retry_scheduled` | 进入重试的投递数 |
 | `hookflow.delivery.dead` | 进入死信的投递数 |
+| `hookflow.delivery.attempted` | 真正发出 HTTP 的尝试数（尝试成功率的分母；重试也算一次） |
+| `hookflow.delivery.duration` | 单次投递尝试耗时（Timer + `publishPercentileHistogram()`，可算 p50/p95/p99） |
 | `hookflow.delivery.duplicate_skipped` | 被 attempt 护栏挡下的重复消息数（**这个数字大于 0 是正常的**，说明护栏在工作） |
 | `hookflow.outbox.published` / `publish_failed` / `publish_rejected` / `recovered` | relay 链路健康度（`publish_rejected` = broker 队列撞到长度上限，积压留在 MySQL） |
 | `hookflow.recovery.retry_enqueued` / `lease_reclaimed` / `stuck_requeued` | 恢复路径被触发的次数 |
@@ -427,6 +429,15 @@ GET /actuator/prometheus
 | `hookflow.worker.over_capacity{policy}` | worker 收到的消息超过租户/端点预算 |
 | `hookflow.attempt.pruned` | `delivery_attempt` 被清理的行数（v0.4；0 表示清理关闭或没有到期数据） |
 | `hookflow.db.lock_conflict{operation}` | 事务级死锁/锁等待被重试的次数（v0.4；`endpoint.pause`、`demo.reset`）。**偶发 > 0 是正常的**，持续升高说明批量操作在撞热点 |
+
+### Prometheus + Grafana（开箱即用）
+
+```bash
+docker compose --profile monitoring up -d     # Grafana http://localhost:3000（admin/hookflow）
+```
+
+3 个预装面板（概览 / 投递详情 / JVM 与资源）和 2 条告警规则（outbox 积压持续增长、死信率 > 10%）。
+启动方式、面板口径、怎么制造一次死信告警见 [docs/monitoring.md](docs/monitoring.md)。
 
 ### 分布式 trace（v0.3）
 
@@ -517,7 +528,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - Python SDK 未提供；**Java SDK** 在 [`sdk/java/`](sdk/java/README.md)（独立的 Maven 项目，`mvn install` 后即可引用）
 - 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 增删改查（含软删除）、
   事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
-  剩余的是 K8s/Helm、Grafana 这类外围（见 [docs/next-steps.md](docs/next-steps.md)）
+  剩余的是 K8s/Helm 这类外围（见 [docs/next-steps.md](docs/next-steps.md)）；Prometheus + Grafana
+  监控已就绪（[docs/monitoring.md](docs/monitoring.md)）
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
@@ -534,7 +546,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；未开始：4C8G 真机基线、告警看板、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；未开始：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
 
 **后续工作与优化计划**（含缺口清单、验收标准、预估工作量、环境坑汇总）：[docs/v0.4-plan.md](docs/v0.4-plan.md)。
 这份文档是给「下一个接手的人」看的，能独立读——包含当前基线、P1/P2/P3 任务、以及明确不做什么。
@@ -579,6 +591,7 @@ docs/
 ├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么
 ├── performance.md   性能报告：方法、数据、瓶颈、优化前后对比
 ├── capacity.md      容量模型：4C8G 能扛多少、先加谁
+├── monitoring.md    监控：怎么起、3 个面板的口径、2 条告警怎么触发
 └── v0.3-checklist.md 本轮验收清单（哪些做了、哪些没做、为什么）
 
 scripts/

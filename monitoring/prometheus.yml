@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alert rules live next to the dashboards. Prometheus evaluates them itself; there
+# is no Alertmanager in this compose profile, so firing alerts are visible in the
+# Prometheus UI (/alerts) and in Grafana's "Alerting" view through the datasource.
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+scrape_configs:
+  # The application's Actuator endpoint. host.docker.internal reaches the published
+  # 8080 port whether the app runs on the host (`mvn spring-boot:run`) or in the
+  # compose `full` profile (which publishes 8080 too).
+  - job_name: hookflow
+    metrics_path: /actuator/prometheus
+    scheme: http
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+        labels:
+          service: hookflow
+
+  # Prometheus can report its own health too; useful when the first panel says
+  # "no data" and the question is whether the scrape or the app is broken.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

@@ -5,7 +5,9 @@
 > 路线图本身只记"想做什么"，现状与已完成项见 [next-steps.md](next-steps.md) 与本文 §1。
 >
 > **执行顺序：J（Java SDK）→ K（K8s/Helm）→ G（Grafana）→ C（CI/CD 补完）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）**。
-> **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)），下一步 K 或 G。
+> **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)）。
+> **G 也已完成**（2026-10-29，见 [`docs/monitoring.md`](monitoring.md)）：3 个面板、2 条告警、两个指标缺口已补，告警实测触发。
+> 下一步是 **K（K8s/Helm）**；G 的指标（`hookflow_outbox_backlog`）已经可以作为 HPA 的自定义指标。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -15,11 +17,12 @@
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **161 个通过** | `.\mvnw.cmd -o test` |
+| 后端单测 | **164 个通过** | `.\mvnw.cmd -o test` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
 | 前端单测 | **77 个通过**（15 个文件，~35s） | `cd frontend; npm test` |
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
+| 监控栈 | Prometheus + Grafana，**3 个面板 / 2 条告警** | `docker compose --profile monitoring up -d`（详见 [monitoring.md](monitoring.md)） |
 | 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck; npm run lint` |
 | 前端生产构建 | 通过（app chunk ≈ 57 kB） | 见 §9 的 TEMP 绕法后 `npm run build:backend` |
 | 已有 ADR | 15 条 | `docs/adr/` |
@@ -27,7 +30,7 @@
 最近 10 个 commit（`git log --oneline -10`）：控制台、测试拆分、Endpoint 删除、事件详情/批量重放、
 请求层测试、V4 索引 benchmark。**master 已推送到 GitHub，工作区应当是干净的**。
 
-路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 的 Java SDK 已完成（K8s/Grafana 未开始）**，
+路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 的 Java SDK 与 Grafana 已完成（K8s 未开始）**，
 **P2 只完成了 CI 的测试部分**，**P3 目标未达**。详细对照见 §11。
 
 ---
@@ -362,10 +365,14 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ## 4. 任务 G：Grafana + 指标缺口（1–2 天）
 
+> **状态：已完成（2026-10-29）**。运维文档见 [`docs/monitoring.md`](monitoring.md)，
+> 面板在 `monitoring/grafana/dashboards/`，告警在 `monitoring/alerts/hookflow.yml`。
+
 **先补两个指标**（路线图自己点名的缺口，见 optimization-roadmap.md L1674–L1697）：
 - `hookflow.delivery.duration`：在 `DeliveryProcessor` 的 settle 路径加 `Timer` +
   `publishPercentileHistogram()`，产出 `hookflow_delivery_duration_seconds_bucket`；
-- `hookflow.delivery.attempted`：每次 claim 尝试 +1，作为成功率的分母。
+- `hookflow.delivery.attempted`：每次真正发出 HTTP 的尝试 +1，作为成功率的分母
+  （重复消息、端已暂停/删除、缺父记录这些没有发请求的 claim **不**计入）。
 
 **再做面板**：
 - `monitoring/prometheus.yml`（scrape `/actuator/prometheus`，15s）
@@ -374,10 +381,19 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 - `compose.yaml` 加 `monitoring` profile（prometheus + grafana，不默认启动）
 - `docs/monitoring.md`：怎么起、每个面板的口径、告警怎么响
 
-**验收**：`docker compose --profile monitoring up -d` 后 Grafana 3000 端口有 3 个预装面板；
-把接收方打死（`/v1/demo/receiver` 切 ERROR 或停掉）→ 死信面板与告警在 1–2 分钟内可见。
+**验收**：
 
-**坑**：Micrometer 名是点号，Prometheus 侧是下划线 + `_total`；面板 JSON 的 datasource 用 `${DS_PROMETHEUS}`。
+- [x] `docker compose --profile monitoring up -d` 后 Grafana 3000 端口有 3 个预装面板
+      （概览 / 投递详情 / JVM 与资源，数据源变量 `${DS_PROMETHEUS}`）
+- [x] `hookflow_delivery_duration_seconds_bucket` 与 `hookflow_delivery_attempted_total` 实际出现在
+      `/actuator/prometheus`，Prometheus target 为 UP
+- [x] 接收方切 ERROR → 死信面板数据上升，`HookFlowDeadLetterRateHigh` 实测变为 **firing**
+      （终态口径 `dead / (dead + succeeded)`，2 分钟窗口 + `for: 1m`）
+- [x] 2 条告警规则加载成功（`/api/v1/rules`），`HookFlowOutboxBacklogGrowing` 需要「积压 > 1000 且
+      10 分钟导数为正」
+
+**坑**：Micrometer 名是点号，Prometheus 侧是下划线 + `_total`；面板 JSON 的 datasource 用 `${DS_PROMETHEUS}`；
+死信率不要用 `attempted` 作分母（一次死信最多 8 次尝试，会把 100% 稀释成 12%）。
 
 ---
 
@@ -478,7 +494,7 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 | P0 管理后台 | ✅ 基本完成（缺租户状态、Endpoint 测试、告警/设置） | U-2、U-3 |
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ❌（有 Dockerfile/compose 底座） | K |
-| P1 Grafana | ❌（指标端点已就绪，缺面板/告警/两个指标） | G |
+| P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |
 | P2 CI/CD | ◐（测试流水线有，Codecov/镜像/Helm/徽章无） | C |
 | P2 Python SDK | ❌ | P |
 | P3 性能（2000/s） | ◐（5 轮优化 + 报告，目标未达） | H |
