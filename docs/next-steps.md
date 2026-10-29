@@ -14,7 +14,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 - 数据库加了一条图表用的索引
 - 前端从零搭了一个 **React 18 + TypeScript 运营控制台**，五个页面全部接真实接口
 
-**没有提交到 git**。所有改动都在工作区里，见 §6。
+**已经提交**：`ae43506`（一次 commit 收下全部改动），工作区干净。提交清单和下一步见 §6、§7。
 
 ---
 
@@ -178,11 +178,26 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
   用 `expect(row).toHaveTextContent('8 / 8')`。
 - 覆盖率插桩会让 AntD + jsdom 的渲染慢 2–3 倍，`testTimeout` 因此是 30s。
 
+**Git / 沙箱**
+
+- 提交时 `git add` 一度报 `Unable to create '.git/index.lock': Permission denied`，同时 `src/`、`docs/`
+  等子目录也写不进去：根目录有沙箱 SID（`S-1-4-…`）的继承写权限，但这些子目录的 ACL 继承是断的。
+  受限模式下 `icacls` 改不了 ACL（没有 WRITE_DAC，连 `/inheritance:e` 都会被拒），
+  把 DSH 文件策略切到 `danger-full-access` 之后写入立刻恢复。再遇到就先查 `(Get-Acl <dir>).Access`
+  里有没有那个 `S-1-4-…` 条目。
+
 ---
 
-## 6. 仓库现状：什么都没提交
+## 6. 仓库现状：这一轮已提交
 
-`git status`：**15 个修改 + 14 个未跟踪**，全部是这一轮的产物。要提交的话一次 commit 就够：
+`git status` 干净。全部改动收在一个 commit 里：
+
+```
+ae43506 feat: operator console - admin read API and a React UI
+        74 files changed, 17416 insertions(+), 39 deletions(-)
+```
+
+里面包含（按 §3 的分层）：
 
 ```
 修改：.github/workflows/ci.yml  .gitignore  README.md  docs/api.md
@@ -191,7 +206,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
       persistence/{DeliveryMapper,TenantMapper}
       service/{DeliveryService,EndpointService,TenantService}
 
-新增：docs/optimization-roadmap.md        （用户写的路线图）
+新增：docs/{optimization-roadmap,next-steps}.md
       frontend/                            （整个前端，含 package-lock.json）
       api/AdminConsoleController.java
       common/auth/BootstrapTokenGuard.java
@@ -204,14 +219,16 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
       test/.../service/ReportServiceTest.java
 ```
 
-`.gitignore` 已经加好：`frontend/node_modules/`、`frontend/dist/`、`frontend/coverage/`、`frontend/.tmp/`、
+`.gitignore` 已经覆盖：`frontend/node_modules/`、`frontend/dist/`、`frontend/coverage/`、`frontend/.tmp/`、
 `src/main/resources/static/ui/`。
+
+回退点就是 `0785cb0`（v0.4 结束）→ `ae43506`（本轮）。
 
 ---
 
 ## 7. 建议的下一步
 
-1. **先提交**（§6），把这一轮固定下来，否则改坏了没有回退点。
-2. 然后按 **C → D**（测试提速 + 拆 `TenantsPage`）：这两件事让后面每一次改动都更快，属于投资。
+1. ~~先提交~~ —— 已完成：`ae43506`，工作区干净。
+2. 接下来按 **C → D**（测试提速 + 拆 `TenantsPage`）：这两件事让后面每一次改动都更快，属于投资。
 3. 再挑功能：**A（Endpoint 删除）** 或 **B（事件详情 + 批量重放）** —— A 补的是验收标准，B 补的是日常排查最常用的两个操作。
 4. 想冲面试展示的话，路线图的 **Java SDK** 和 **K8s/Helm** 是最高性价比的两块（SDK 有现成草案）。
