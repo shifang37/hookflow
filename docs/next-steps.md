@@ -3,6 +3,7 @@
 > 这份文档是给**下一次对话**用的，假设读者没有任何上下文。
 > 它记录：当前已验证的状态、未完成任务的清单（含具体文件和坑）、以及环境上的注意事项。
 > 路线图本身在 [optimization-roadmap.md](optimization-roadmap.md)，这里只记「已经做了什么」和「接下来做什么」。
+> **剩下的工作已经拆成可执行计划：[remaining-plan.md](remaining-plan.md)（从 Java SDK 开始）。**
 
 ---
 
@@ -358,8 +359,9 @@ ae43506 feat: operator console - admin read API and a React UI
 7. ~~F：`topFailureReasons` 无真实死信~~ —— 已完成：`FailureReasonsIT` 覆盖分组、百分比分母和 `LIMIT`，见 §4F。
 8. ~~G：V4 索引收益未量化~~ —— 已完成：图表查询 316 → 132 ms（2.4×），settle −10%、insert −7%，
    见 [performance.md §23](performance.md#23-v4-的索引图表查询快-24-倍settle-慢-10) 与 `docs/perf/2026-10-29-v4-index/`。
-9. 剩下的按价值排：
-   - **H**：Java SDK（路线图有代码草案）、K8s/Helm、Grafana 面板——面试展示性价比最高；
-   - **queries.ts 的 hook 覆盖**（24%）：`renderHook` + `QueryClient` wrapper 能盖住轮询/失效逻辑；
-   - **预聚合**：§23.3 说明图表查询剩下的 ~100 ms 全在聚合，索引已经到顶；
-   - 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。
+9. **剩下的工作已经拆成可执行计划：[remaining-plan.md](remaining-plan.md)**，顺序 J（Java SDK，先做）→
+   K（K8s/Helm）→ G（Grafana）→ C（CI/CD）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）。
+   如果时间紧、只想做面试展示，建议 **J → G → K**（G 比 K 便宜，而 K 的 HPA 依赖 G 的指标）。
+10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
+    §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
+11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。
