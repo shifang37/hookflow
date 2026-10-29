@@ -108,7 +108,14 @@ export function toApiError(error: unknown): ApiError {
   return new ApiError(error instanceof Error ? error.message : '未知错误', { status: 0, cause: error })
 }
 
-const http = axios.create({
+/**
+ * The axios instance behind every call.
+ *
+ * Exported for the request-level tests: they swap in an adapter and assert the URL, query
+ * string, headers and body the API layer actually produces. The app itself only ever
+ * imports {@link api}, so this is a seam for tests, not a second way to make requests.
+ */
+export const http = axios.create({
   // Same origin in dev (Vite proxy) and in production (served from /ui/ by the app),
   // so there is no base URL to configure and no CORS to arrange.
   baseURL: '/',

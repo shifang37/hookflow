@@ -24,8 +24,8 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 |---|---|---|
 | 后端单测 | **160 个通过** | `./mvnw -o test` |
 | 后端集成测试 | **67 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **69 个通过**（12 个文件） | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 83.75% / 分支 82.35% / 函数 49.71%，约 69s | `npm run test:coverage` |
+| 前端单测 | **76 个通过**（15 个文件），~34s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 84.95% / 分支 83.01% / 函数 61.16%，~70s | `npm run test:coverage` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -131,10 +131,15 @@ deliveryCount, deliveries)`。`payload` 是**原始 JSON 文本**（前端自己
 
 现在（本机 20 逻辑核）：
 
-| 命令 | 拆之前 | 拆之后 |
-|---|---|---|
-| `npm test` | 59.8s | **32.3s** |
-| `npm run test:coverage` | **139s** | **70.4s** |
+| 命令 | 最初 | 拆完租户页 | 现在（又加了端点页测试并再拆） |
+|---|---|---|---|
+| `npm test` | 59.8s | 32.3s | **34.2s** |
+| `npm run test:coverage` | **139s** | 70.4s | **70.2s** |
+| 测试文件 / 用例 | 9 / 60 | 11 / 60 | **15 / 76** |
+
+第二轮拆分：`EndpointsPage.test.tsx` 在 A 之后是 10 个用例、插桩后 **84.9s**，成了新的关键路径（整轮
+93.5s）。按同样的办法拆成 `EndpointsPage.list` / `.actions` / `.create` 三个文件（夹具放
+`src/test/endpointFixtures.ts`），关键路径回落到 `TenantsPage.keys` 的 62s，整轮回到 70s。
 
 做法：`TenantsPage.test.tsx` 一个文件里 11 个用例、每个都渲染整页 + 抽屉 + 弹窗，v8 插桩后
 一个文件就占 127s（suite 的测试时间总共 234s）。vitest 只在**文件之间**并行、文件内部串行，
@@ -173,15 +178,43 @@ deliveryCount, deliveries)`。`payload` 是**原始 JSON 文本**（前端自己
 （app chunk 仍 ~51 kB），覆盖率文件和数字无意外变化。测试仍然只 import `TenantsPage`，
 所以这次重构没有碰任何测试文件。
 
-### E. `src/api` 的请求函数没有测试
+### E. `src/api` 的请求函数没有测试 —— 已完成
 
-覆盖率里 `src/api` 只有 55.6%，因为只测了纯函数（`buildHeaders` / `toApiError`）；`api.*` 那 15 个请求函数没被断言。
-补的话用 `msw` 或 axios adapter，验证 URL、方法、请求头、参数序列化（尤其 `undefined` 不能变成 `?status=`）。
+`client.requests.test.ts`（7 个用例）用 **axios adapter** 顶替真实网络：adapter 记录 axios 拼好的
+config，再用 `axios.getUri(config)` 跑同一个 params 序列化器，所以断言的就是"本该发出去的字节"。
 
-### F. `topFailureReasons` 没有被真实死信覆盖
+- 21 个 `api.*` 函数逐个断言 **方法 + 路径**（表驱动，一条 `for`），包括 `DELETE /v1/endpoints/{id}`
+  和 `POST /v1/deliveries/replay` 这两个新接口。
+- 参数序列化：`listEvents({ eventType: undefined, page: 0 })` 的 URI 必须是 `/v1/events?page=0`，
+  `listDeliveries({ status: undefined, eventId: undefined })` 必须是 `/v1/deliveries` —— 也就是
+  **`undefined` 不能变成 `?status=`**，这正是文档里点名要防的那种回归。
+- 两个信任域：租户调用带 `Authorization: Bearer …`、**不带** `X-Bootstrap-Token`；admin 调用反过来。
+- 写请求的 body 是 JSON（`createEndpoint` / `replayDeliveries` / `updateTenant`），方法分别是
+  POST / POST / PATCH。
+- 缺凭证时在 adapter 之前就抛 `ApiError(401)`，`calls` 长度为 0（没有"发了一半"的请求）。
+- 错误响应 → `ApiError` 保留 `code` / `errorName` / `requestId`；204 无 body 不算失败。
 
-`ReadApiIT` 里没有 DEAD 投递，所以 `ReportMapper.topFailureReasons` 只走了「无数据返回空列表」的路径，`LIMIT` 绑定没验证过。
-造 DEAD 需要故障注入（参考 `ReceiverFaultIT` 的模式）或直接写库。**这是目前唯一没有被真数据跑过的报表 SQL。**
+为了能换 adapter，`client.ts` 里那个 axios 实例改成 `export const http`（注释写明这是测试缝，
+应用只 import `api`）。没有引入 `msw`。
+
+效果：`src/api` 语句覆盖 55.6% → **61.6%**（`client.ts` 基本全覆盖；掉下来的仍是 `queries.ts` 的
+hook），整包函数覆盖 49.7% → **61.2%**。
+
+`queries.ts` 的 hook 仍然只有 24% 覆盖——那是另一件事（要 `renderHook` + QueryClient wrapper），
+这次没做。
+
+### F. `topFailureReasons` 没有被真实死信覆盖 —— 已完成
+
+`FailureReasonsIT`（2 个用例，真 MySQL）直接写 DEAD 投递（每条一个新 event + endpoint，
+绕开 `uk_delivery_event_endpoint`），覆盖了之前只有空分支的 SQL：
+
+- 分组口径：按 `(error_class, status_code)` 分组，同一 class 不同 status code 是两行；
+  百分比的分母是**窗口内 dead 总数**（5 条里 2 条 SERVER_5XX = 40.0）。
+- `LIMIT` 绑定：6 个 class（计数 6/5/4/3/2/1，共 21 条 dead），返回恰好 **5** 行、按计数倒序、
+  计数最小的那条被丢掉；百分比仍以 21 为分母（28.57 而不是 20）。
+
+为什么直接写库而不是故障注入：要让 worker 产生 6 种不同的 error class，得配 6 种接收方故障，
+又慢又碎；被测的是"settled DEAD 行上的那一条 SQL"，不是"怎么变成 DEAD 的"（那条路径 `ReceiverFaultIT` 已经覆盖）。
 
 ### G. 索引收益没有量化
 
@@ -306,9 +339,10 @@ ae43506 feat: operator console - admin read API and a React UI
 4. ~~A：Endpoint 删除~~ —— 已完成（V5 + 5 个 IT + 3 个单测 + 前端删除操作），见 §4A。
 5. ~~B：事件详情 + 批量重放~~ —— 已完成（`GET /v1/events/{id}` + `POST /v1/deliveries/replay` +
    事件抽屉 + 两张表的多选），见 §4B。
-6. 路线图 P0（「所有 CRUD 通过 UI 完成」+「前端可视化」）到这里就齐了。剩下按价值排：
-   - **E**：`src/api` 的 15 个请求函数还没有断言（覆盖率 55.6%），补 `msw`/adapter 测试；
-   - **F**：`topFailureReasons` 还没被真实死信跑过（唯一没被真数据验证的报表 SQL）；
-   - **G**：V4 索引的 before/after 数字（`tools/LoadGen` + `docs/perf/` 已有骨架）；
-   - **H**：Java SDK（路线图有代码草案）、K8s/Helm、Grafana 面板——面试展示性价比最高。
-7. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。
+6. ~~E：`src/api` 请求函数无测试~~ —— 已完成：21 个请求函数逐个断言，`src/api` 语句 55.6% → 61.6%，见 §4E。
+7. ~~F：`topFailureReasons` 无真实死信~~ —— 已完成：`FailureReasonsIT` 覆盖分组、百分比分母和 `LIMIT`，见 §4F。
+8. 路线图 P0 和测试债都清了。剩下按价值排：
+   - **G**：V4 索引的 before/after 数字（`tools/LoadGen` + `docs/perf/` 已有骨架）——唯一还缺的"实测"类工作；
+   - **H**：Java SDK（路线图有代码草案）、K8s/Helm、Grafana 面板——面试展示性价比最高；
+   - **queries.ts 的 hook 覆盖**（24%）：`renderHook` + `QueryClient` wrapper 能盖住轮询/失效逻辑；
+   - 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

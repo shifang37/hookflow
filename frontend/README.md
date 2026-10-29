@@ -57,10 +57,12 @@ src/
 │   ├── AppShell.tsx / StatusTag.tsx / PageTitle.tsx / TokenDrawer.tsx
 │   ├── CredentialAlert.tsx / SecretRevealModal.tsx
 │   └── TenantDetailDrawer.tsx / TenantKeysCard.tsx / CreateTenantModal.tsx
+│       EventDetailDrawer.tsx / replayMessage.ts
 ├── pages/            # 五个页面（租户页只留表格与头部动作）
 ├── stores/uiStore.ts # 时间窗口、凭证抽屉
 ├── test/setup.ts     # jsdom 缺口（matchMedia、ResizeObserver、getComputedStyle）
-├── test/tenantFixtures.ts  # 租户页三个测试文件共用的夹具与 mock 默认值
+├── test/tenantFixtures.ts    # 租户页三个测试文件共用的夹具与 mock 默认值
+├── test/endpointFixtures.ts  # Endpoint 页三个测试文件共用
 └── theme.ts          # AntD token + 图表配色
 ```
 
@@ -89,18 +91,23 @@ Vite 的转换管线，不用再配 babel/ts-jest 一套独立编译。`npm test
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint（含 react-hooks 规则）
-npm test             # 60 个用例
+npm test             # 76 个用例
 npm run test:coverage
 ```
+
+`src/api/client.requests.test.ts` 不走网络：它给 axios 换一个 adapter，记录 axios 拼好的 config，
+再用 `axios.getUri` 跑同一个 params 序列化器，断言 21 个 `api.*` 函数的**方法、路径、请求头、
+参数序列化和请求体**——特别是 `undefined` 参数不能变成 `?status=`。
 
 > **为什么慢**：AntD 在 jsdom 里渲染一个带抽屉/弹窗的页面要几秒，覆盖率插桩后再翻倍，
 > 所以 `testTimeout` 是 30s 而不是默认的 5s（`vite.config.ts` 里有说明）。
 >
 > Vitest 只在**文件之间**并行，文件内部的用例是串行的 —— 所以页面测试按主题拆文件，
-> 而不是把一套夹具和十个用例全塞进一个文件：`TenantsPage.list/keys/create.test.tsx`
-> 三个文件能同时跑，共用 `src/test/tenantFixtures.ts`。拆完这套是 `npm test` 约 32s、
-> `npm run test:coverage` 约 70s（拆之前 60s / 139s）。下一个瓶颈是
-> `EndpointsPage.test.tsx`（插桩后约 63s）；要再快就按同样办法拆它，不必调超时。
+> 而不是把一套夹具和十个用例全塞进一个文件：`TenantsPage.list/keys/create.test.tsx` 和
+> `EndpointsPage.list/actions/create.test.tsx` 各三个文件，夹具分别在 `src/test/tenantFixtures.ts`
+> 和 `src/test/endpointFixtures.ts`。现在是 `npm test` 约 34s、`npm run test:coverage` 约 70s
+> （最初 60s / 139s）。下一个瓶颈是 `TenantsPage.keys.test.tsx`（插桩后约 62s）；
+> 要再快就按同样办法拆它，不必调超时。
 
 ## 还没做的
 
