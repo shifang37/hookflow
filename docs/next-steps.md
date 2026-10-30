@@ -366,7 +366,7 @@ ae43506 feat: operator console - admin read API and a React UI
    [`sdk/java/README.md`](../sdk/java/README.md)，监控见 [monitoring.md](monitoring.md)，
    chart 见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)。剩余工作按
    [remaining-plan.md](remaining-plan.md)：**C（CI/CD）→ U（控制台小缺口）→ P（Python SDK）→
-   H（P3 性能）**。
+   H（P3 性能）**。C 的独立执行任务书是 [task-c-brief.md](task-c-brief.md)。
 10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

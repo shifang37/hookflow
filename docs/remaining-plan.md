@@ -421,6 +421,9 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ## 5. 任务 C：CI/CD 补完（2–3 天）
 
+> **执行任务书：[task-c-brief.md](task-c-brief.md)**（自包含，新对话先读它；包含当前基线、
+> 精确改法、`argLine` 时区坑、Python SDK 未实现的处理、以及哪些项不能声称已验证）。
+
 - [ ] 后端接 JaCoCo（单测即可，IT 不跑覆盖率以免拖慢 CI）→ Codecov 上传
       （没有 `CODECOV_TOKEN` 就跳过并标注）
 - [ ] `.github/workflows/docker.yml`：push master + tag → buildx 构建并推 `ghcr.io/shifang37/hookflow`
