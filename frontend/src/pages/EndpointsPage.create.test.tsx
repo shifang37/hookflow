@@ -67,7 +67,7 @@ describe('EndpointsPage', () => {
     // The secret dialog is the whole point of the flow, so assert it is what appears.
     expect(await screen.findByText('签名密钥只显示这一次')).toBeInTheDocument()
     expect(screen.getByLabelText('signing secret')).toHaveValue('c2VjcmV0')
-  }, 30_000)
+  }, 60_000)
 
   it('rejects a callback URL that is not http(s) before the round trip', async () => {
     const user = typing()
@@ -85,5 +85,5 @@ describe('EndpointsPage', () => {
 
     expect(await screen.findByText('必须是 http:// 或 https:// 开头的完整地址')).toBeInTheDocument()
     expect(mutate).not.toHaveBeenCalled()
-  }, 30_000)
+  }, 60_000)
 })

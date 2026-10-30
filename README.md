@@ -395,7 +395,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | run #15：后端 build 成功（164 单测 + JaCoCo + 69 IT），Codecov 步骤**按设计跳过**（没有 token）；前端 `test:coverage` 有 3 个用例在 2 核 runner 上超过 30s（runs 13–15），已把 `testTimeout` 提到 60s，修复后的运行见 Actions |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | run #15/#16：后端 build 成功（164 单测 + JaCoCo + 69 IT），Codecov 步骤**按设计跳过**（没有 token）；前端 `test:coverage` 有 3 个用例在 2 核 runner 上超过 30s（runs 13–16），已把全局 `testTimeout` 和两个 create 测试里显式的 30s 都提到 60s，修复后的运行见 Actions |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | workflow 已就绪；**没有实际 push 过**（需要 GHCR 权限） |

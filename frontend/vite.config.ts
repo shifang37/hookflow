@@ -63,8 +63,9 @@ export default defineConfig(({ command }) => ({
      * GitHub's 2-core `ubuntu-latest` runner the slowest create/drawer tests exceeded the
      * 30s ceiling (CI runs 13, 14 and 15), while the same suite stays well under it
      * locally. A per-test override would have to be re-discovered by whoever adds the
-     * next page test, so the budget is stated once. Every assertion is explicit, so a
-     * genuine hang still fails — it just takes longer to say so.
+     * next page test, so the budget is stated once here; the two create test files that
+     * already carried an explicit 30s argument use 60s too. Every assertion is explicit,
+     * so a genuine hang still fails — it just takes longer to say so.
      */
     testTimeout: 60_000,
     coverage: {

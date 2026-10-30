@@ -43,7 +43,7 @@ describe('TenantsPage', () => {
 
     expect(await screen.findByText('请输入租户名称')).toBeInTheDocument()
     expect(mutate).not.toHaveBeenCalled()
-  }, 30_000)
+  }, 60_000)
 
   it('creates a tenant and reveals its first key exactly once', async () => {
     const user = typing()
@@ -82,7 +82,7 @@ describe('TenantsPage', () => {
 
     expect(await screen.findByText('租户已创建')).toBeInTheDocument()
     expect(screen.getByLabelText('provisioned api key')).toHaveValue('hk_abc123_secret')
-  }, 30_000)
+  }, 60_000)
 
   it('shows the backend conflict message and leaves the form open to fix the name', async () => {
     const user = typing()
@@ -113,5 +113,5 @@ describe('TenantsPage', () => {
     expect(await screen.findByText('tenant name already exists: ab')).toBeInTheDocument()
     // The input is still there: a failed create must not throw away what was typed.
     expect(screen.getByPlaceholderText('acme')).toBeInTheDocument()
-  }, 30_000)
+  }, 60_000)
 })

@@ -1781,7 +1781,8 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      run #15 的后端 build 成功；前端 coverage 在 2 核 runner 上超时（runs 13–15），已把 `testTimeout` 提到 60s
+      run #15/#16 的后端 build 成功；前端 coverage 在 2 核 runner 上超时（runs 13–16），已把全局
+      `testTimeout` 与两个 create 测试里显式的 30s 都提到 60s
 - [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
