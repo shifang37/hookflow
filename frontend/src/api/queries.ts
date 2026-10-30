@@ -45,6 +45,7 @@ export const queryKeys = {
   events: (query: EventQuery) => ['events', query] as const,
   eventDetail: (eventId: number) => ['event-detail', eventId] as const,
   deliveries: (query: DeliveryQuery) => ['deliveries', query] as const,
+  deliveryDetail: (deliveryId: number) => ['delivery-detail', deliveryId] as const,
   endpoints: (query: EndpointQuery) => ['endpoints', query] as const,
   tenants: (query: TenantQuery) => ['tenants', query] as const,
   tenant: (tenantId: number) => ['tenant', tenantId] as const,
@@ -77,6 +78,21 @@ export function useDeliveries(query: DeliveryQuery) {
     queryFn: () => api.listDeliveries(query),
     refetchInterval: POLL_INTERVAL_MS.deliveries,
     placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * One delivery's attempt history, for the detail drawer.
+ *
+ * The list endpoint only carries roll-up counts, so this is a deliberate second request
+ * rather than a wider list payload: most rows are never opened, and attempts are the
+ * largest thing the read API can return per delivery.
+ */
+export function useDeliveryDetail(deliveryId: number | undefined) {
+  return useQuery({
+    queryKey: queryKeys.deliveryDetail(deliveryId ?? -1),
+    queryFn: () => api.getDelivery(deliveryId as number),
+    enabled: deliveryId !== undefined,
   })
 }
 

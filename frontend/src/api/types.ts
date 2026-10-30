@@ -55,6 +55,29 @@ export interface Delivery {
 }
 
 /**
+ * One HTTP attempt. `finishedAt` and `durationMs` are null while the attempt is still
+ * IN_PROGRESS; `statusCode` is null when the request never got an HTTP response
+ * (timeout / connect error). The platform keeps the response body only as a truncated
+ * preview, so `responsePreview` is not the full receiver response.
+ */
+export interface DeliveryAttempt {
+  attemptNo: number
+  status: string
+  statusCode: number | null
+  errorClass: string | null
+  durationMs: number | null
+  responsePreview: string | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+/** A delivery plus every attempt recorded for it, newest state first at the row level. */
+export interface DeliveryDetail {
+  delivery: Delivery
+  attempts: DeliveryAttempt[]
+}
+
+/**
  * One event with its payload and the deliveries it fanned out to.
  *
  * `payload` is the raw JSON **text** the platform stored — the API never re-encodes it, so

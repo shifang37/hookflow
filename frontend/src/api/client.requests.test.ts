@@ -7,7 +7,7 @@ import { ApiError, api, http } from './client'
  * Request-level tests: what each `api.*` function actually puts on the wire.
  *
  * The page tests mock the hooks, and `client.test.ts` covers the pure helpers, so before
- * this file nothing asserted the 21 request functions — a wrong path or a leaked
+ * this file nothing asserted the request functions — a wrong path or a leaked
  * `?status=undefined` would have reached the backend unnoticed. The adapter records the
  * config axios built, and `axios.getUri` runs the same params serializer the real adapters
  * do, so these are the bytes that would have been sent.
@@ -68,6 +68,12 @@ describe('api request functions', () => {
         call: () => api.listDeliveries({ status: 'DEAD', endpointId: 2, page: 1, size: 20 }),
         method: 'GET',
         uri: '/v1/deliveries?status=DEAD&endpointId=2&page=1&size=20',
+      },
+      {
+        name: 'getDelivery',
+        call: () => api.getDelivery(7),
+        method: 'GET',
+        uri: '/v1/deliveries/7',
       },
       {
         name: 'replayDelivery',

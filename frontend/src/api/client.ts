@@ -5,6 +5,7 @@ import type {
   BatchReplay,
   CreateEndpointRequest,
   Delivery,
+  DeliveryDetail,
   DeliveryStatus,
   Endpoint,
   EndpointCreated,
@@ -176,6 +177,10 @@ export const api = {
 
   listDeliveries: (query: DeliveryQuery = {}) =>
     request<PageResponse<Delivery>>('tenant', { method: 'GET', url: '/v1/deliveries', params: query }),
+
+  /** One delivery plus its attempt history; the list endpoint never carries attempts. */
+  getDelivery: (deliveryId: number) =>
+    request<DeliveryDetail>('tenant', { method: 'GET', url: `/v1/deliveries/${deliveryId}` }),
 
   replayDelivery: (deliveryId: number) =>
     request<Delivery>('tenant', { method: 'POST', url: `/v1/deliveries/${deliveryId}/replay` }),

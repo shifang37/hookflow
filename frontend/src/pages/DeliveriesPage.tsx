@@ -14,6 +14,7 @@ import { formatTimestamp } from '@/api/time'
 import { DELIVERY_STATUSES, MAX_BATCH_REPLAY, type Delivery, type DeliveryStatus } from '@/api/types'
 import { PageTitle } from '@/components/PageTitle'
 import { CredentialAlert } from '@/components/CredentialAlert'
+import { DeliveryDetailDrawer } from '@/components/DeliveryDetailDrawer'
 import { describeBatchReplay } from '@/components/replayMessage'
 import { DeliveryStatusTag, LiveBadge, STATUS_META } from '@/components/StatusTag'
 
@@ -33,6 +34,7 @@ export function DeliveriesPage() {
   const [endpointId, setEndpointId] = useState<number | null>(null)
   const [page, setPage] = useState(0)
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
+  const [detailId, setDetailId] = useState<number | undefined>(undefined)
 
   const query = useMemo<DeliveryQuery>(
     () => ({
@@ -127,20 +129,25 @@ export function DeliveriesPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 96,
+      width: 152,
       render: (_, delivery) => (
-        <Popconfirm
-          title="重放这条投递？"
-          description="状态回到 PENDING，并额外给一次尝试额度。"
-          okText="重放"
-          cancelText="取消"
-          disabled={delivery.status !== 'DEAD'}
-          onConfirm={() => handleReplay(delivery.id)}
-        >
-          <Button size="small" disabled={delivery.status !== 'DEAD'} loading={replay.isPending}>
-            重放
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => setDetailId(delivery.id)}>
+            详情
           </Button>
-        </Popconfirm>
+          <Popconfirm
+            title="重放这条投递？"
+            description="状态回到 PENDING，并额外给一次尝试额度。"
+            okText="重放"
+            cancelText="取消"
+            disabled={delivery.status !== 'DEAD'}
+            onConfirm={() => handleReplay(delivery.id)}
+          >
+            <Button size="small" disabled={delivery.status !== 'DEAD'} loading={replay.isPending}>
+              重放
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -256,6 +263,8 @@ export function DeliveriesPage() {
           locale={{ emptyText: '没有匹配的投递。' }}
         />
       </Card>
+
+      <DeliveryDetailDrawer deliveryId={detailId} onClose={() => setDetailId(undefined)} />
     </div>
   )
 }

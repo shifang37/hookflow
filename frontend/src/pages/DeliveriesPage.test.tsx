@@ -2,22 +2,29 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '@/test/render'
 import { useUiStore } from '@/stores/uiStore'
-import type { BatchReplay, Delivery } from '@/api/types'
+import type { BatchReplay, Delivery, DeliveryAttempt, DeliveryDetail } from '@/api/types'
 
 vi.mock('@/api/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/queries')>()
   return {
     ...actual,
     useDeliveries: vi.fn(),
+    useDeliveryDetail: vi.fn(),
     useReplayDelivery: vi.fn(),
     useBatchReplayDeliveries: vi.fn(),
   }
 })
 
-import { useBatchReplayDeliveries, useDeliveries, useReplayDelivery } from '@/api/queries'
+import {
+  useBatchReplayDeliveries,
+  useDeliveries,
+  useDeliveryDetail,
+  useReplayDelivery,
+} from '@/api/queries'
 import { DeliveriesPage } from './DeliveriesPage'
 
 const mockedUseDeliveries = vi.mocked(useDeliveries)
+const mockedUseDeliveryDetail = vi.mocked(useDeliveryDetail)
 const mockedUseReplay = vi.mocked(useReplayDelivery)
 const mockedUseBatchReplay = vi.mocked(useBatchReplayDeliveries)
 
@@ -47,11 +54,36 @@ function withDeliveries(items: Delivery[]) {
   } as unknown as ReturnType<typeof useDeliveries>)
 }
 
+const attempt: DeliveryAttempt = {
+  attemptNo: 1,
+  status: 'SUCCEEDED',
+  statusCode: 200,
+  errorClass: null,
+  durationMs: 321,
+  responsePreview: '{"ok":true}',
+  startedAt: '2026-10-29T08:19:00.000',
+  finishedAt: '2026-10-29T08:19:00.321',
+}
+
+const detail: DeliveryDetail = {
+  delivery: delivery(),
+  attempts: [attempt],
+}
+
+function withDeliveryDetail(data: DeliveryDetail | undefined) {
+  mockedUseDeliveryDetail.mockReturnValue({
+    data,
+    error: null,
+  } as unknown as ReturnType<typeof useDeliveryDetail>)
+}
+
 describe('DeliveriesPage', () => {
   beforeEach(() => {
     mockedUseDeliveries.mockReset()
+    mockedUseDeliveryDetail.mockReset()
     mockedUseReplay.mockReset()
     mockedUseBatchReplay.mockReset()
+    withDeliveryDetail(undefined)
     mockedUseReplay.mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
@@ -75,6 +107,19 @@ describe('DeliveriesPage', () => {
     expect(row).not.toBeNull()
     expect(row).toHaveTextContent('8 / 8')
     expect(row).toHaveTextContent('SERVER_5XX · 500')
+  })
+
+  it('opens the delivery detail drawer with the attempt history', async () => {
+    withDeliveries([delivery()])
+    withDeliveryDetail(detail)
+
+    renderWithProviders(<DeliveriesPage />)
+    fireEvent.click(screen.getByRole('button', { name: /详\s*情/ }))
+
+    expect(await screen.findByText('投递 #7')).toBeInTheDocument()
+    expect(screen.getByText('尝试历史（1）')).toBeInTheDocument()
+    expect(screen.getByText('321 ms')).toBeInTheDocument()
+    expect(screen.getByText('SUCCEEDED')).toBeInTheDocument()
   })
 
   it('only offers replay on DEAD rows, mirroring the backend state machine', () => {
