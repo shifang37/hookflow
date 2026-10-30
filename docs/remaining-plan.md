@@ -10,7 +10,8 @@
 > **K 也已完成**（2026-10-30，见 [`helm/hookflow/`](../helm/hookflow/)）：kind 实测滚动更新/杀 worker/HPA。
 > **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
 > GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
-> **未验证**：GHCR 推送、Helm OCI 发布、Codecov 上传（没有 token/没在 Actions 上跑过）。
+> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #15 的后端 build 成功。
+> **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
 > 下一步是 **U（控制台小缺口）**。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
@@ -432,19 +433,20 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
       LINE **26.1%**（728/2786）、`target/site/jacoco/jacoco.xml` 生成；上传步骤在 `ci.yml` 里，
       但仓库没有 token，**没有上传过**（步骤会打印原因并跳过）。
 - [x] `.github/workflows/docker.yml`：push master + tag → buildx 构建并推 `ghcr.io/shifang37/hookflow`
-      （`packages: write`，tag 用 sha + latest）。workflow 已就绪；本地 `npm run build:backend` 通过，
-      但 `docker build` 卡在容器内 Maven `dependency:go-offline`（网络），**镜像没有构建完成、
-      没有在 Actions 上跑过、没有推过 GHCR**。
+      （`packages: write`，tag 用 sha + latest）。**Actions run #1 验证成功**：前端构建、buildx、
+      GHCR 推送全部通过；本地 `docker build` 仍卡在容器内 Maven `dependency:go-offline`（网络）。
 - [x] Helm 发布：`helm package` + 推 OCI（`oci://ghcr.io/shifang37/charts`）或 chart-releaser；
       依赖 K 完成。`helm-publish.yml` 已就绪；本地只验证了 `helm package`/`helm lint`，**没有真正 push**。
 - [x] README 换**实时** CI 徽章（现在是静态 shields）：CI / Docker / Helm / Java SDK 四个实时徽章；
       Codecov 徽章等到能上传成功再加（否则长期 unknown）。
 - [x] SDK（J）与 Python SDK（P）的 job 都在 CI 里：Java 用已有的 `sdk.yml`；`python-sdk.yml` 已预置，
-      路径过滤使它**在 P 落地前不会运行**，不能算「Python SDK 已过 CI」。
+      路径过滤使它**在 P 落地前不会运行**，不能算「Python SDK 已过 CI」。首次推送时它曾因 workflow
+      文件自身在触发路径里而失败一次（run #1，没有 `sdk/python`），已把自身从触发路径移除。
 
-**完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「README 徽章」已生效；
-「Codecov 上传」「master 自动构建镜像」「tag 发布 Helm」三者的 workflow 已写好，
-但**没有 token / 没有在 Actions 上验证**，不能声称已绿。Python job 同理，只是预置。
+**完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「master 自动构建镜像」「README 徽章」
+已生效（docker run #1 推送 GHCR 成功；ci run #15 后端 build 成功，前端 coverage 的 30s 超时已
+提到 60s）。「Codecov 上传」「tag 发布 Helm」的 workflow 已写好，但**没有 token / 没有在 Actions 上
+验证**，不能声称已绿。Python job 只是预置。
 验收对照见 [optimization-roadmap.md](optimization-roadmap.md) P2 的「实现位置」。
 
 验收 = 路线图 optimization-roadmap.md P2「验收标准」的 5 条，逐条能指到一个 workflow 步骤。

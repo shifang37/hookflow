@@ -1757,8 +1757,9 @@ hookflow_outbox_backlog
 
 ## P2：CI/CD 完善
 
-> **状态（2026-10-30）**：已实现，见下方「实现位置」。三件依赖外部权限的事
-> （GHCR 推送、Helm OCI 发布、Codecov 上传）**没有验证**，不要标成已绿。
+> **状态（2026-10-30）**：已实现，见下方「实现位置」。`docker` run #1 已在真实 Actions 上
+> 构建并推送 GHCR，`ci` run #15 的后端 build 成功；**Helm OCI 发布和 Codecov 上传还没有验证**，
+> 不要标成已绿。
 
 ### 现状问题（v0.4 之前）
 
@@ -1779,11 +1780,12 @@ hookflow_outbox_backlog
 
 ### 验收标准
 
-- [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）
+- [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
+      run #15 的后端 build 成功；前端 coverage 在 2 核 runner 上超时（runs 13–15），已把 `testTimeout` 提到 60s
 - [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
-      再 buildx 推 `ghcr.io/shifang37/hookflow`）。**未在 Actions 上跑过、未推过 GHCR**
+      再 buildx 推 `ghcr.io/shifang37/hookflow`）。**run #1 已成功构建并推送 GHCR**
 - [x] 打 tag 自动发布 Helm Chart —— `helm-publish.yml`（tag `helm-v*`，`helm package --version <tag>` 后推
       `oci://ghcr.io/shifang37/charts`）。**没有实际 push 过**
 - [x] README 显示 CI 状态徽章 —— 换成 GitHub Actions 实时徽章（CI / Docker / Helm / Java SDK）
@@ -1801,8 +1803,9 @@ hookflow_outbox_backlog
 
 本机能验证的是：`./mvnw -o -Pcoverage test`（164 个通过，LINE 26.1%，仅单测）、
 `helm package`/`helm lint`、前端 77 个测试与 `npm run build:backend`。
-`docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），**镜像没有构建完成**；
-GHCR 推送和 Codecov 只能在 GitHub Actions 页面看，本地无法伪造。
+`docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
+但 **GitHub Actions 的 `docker` run #1 已经成功构建并推送 GHCR**。
+Helm OCI 发布与 Codecov 上传仍未验证，只能在 Actions 页面看，本地无法伪造。
 
 ---
 

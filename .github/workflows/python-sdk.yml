@@ -4,15 +4,19 @@ name: python-sdk
 # exist yet, so the path filter keeps this job dormant: it becomes active by
 # itself when task P lands, without editing this file. Until then it must not be
 # described as "Python SDK passes CI".
+#
+# The workflow file itself is deliberately NOT in the path filters below: the
+# first version included it, so adding this file triggered the job and it failed
+# on `sdk/python` not existing (run 41022043877). Once task P adds sdk/python/**,
+# every change there triggers the job; a workflow-only edit before that point has
+# nothing to test anyway.
 on:
   push:
     paths:
       - 'sdk/python/**'
-      - '.github/workflows/python-sdk.yml'
   pull_request:
     paths:
       - 'sdk/python/**'
-      - '.github/workflows/python-sdk.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

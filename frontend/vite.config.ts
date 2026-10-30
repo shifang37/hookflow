@@ -55,16 +55,18 @@ export default defineConfig(({ command }) => ({
     setupFiles: ['./src/test/setup.ts'],
     css: false,
     /**
-     * 30s, not the 5s default.
+     * 60s, not the 5s default and not the 30s this used to be.
      *
      * Opening a drawer that contains a table, a list and a form takes a couple of seconds
      * in jsdom, and v8 coverage instrumentation roughly doubles that; the same test that
-     * passes in 7s locally times out at 5s, then again at 15s, in `test:coverage`. A
-     * per-test override would have to be re-discovered by whoever adds the next page
-     * test, so the budget is stated once. Every assertion is explicit, so a genuine hang
-     * still fails — it just takes longer to say so.
+     * passes in 7s locally times out at 5s, then again at 15s, in `test:coverage`. On
+     * GitHub's 2-core `ubuntu-latest` runner the slowest create/drawer tests exceeded the
+     * 30s ceiling (CI runs 13, 14 and 15), while the same suite stays well under it
+     * locally. A per-test override would have to be re-discovered by whoever adds the
+     * next page test, so the budget is stated once. Every assertion is explicit, so a
+     * genuine hang still fails — it just takes longer to say so.
      */
-    testTimeout: 30_000,
+    testTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

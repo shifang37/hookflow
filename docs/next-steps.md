@@ -30,7 +30,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
-| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**GHCR 推送、Helm OCI 发布、Codecov 上传都没有实际验证** | `.github/workflows/` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 构建并推送 GHCR 成功、`ci` run #15 后端 build 成功；**未验证**：Helm OCI 发布、Codecov 上传 | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -261,7 +261,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 发布 workflow 就绪但**尚未实际发布** |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
-| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**未验证**：GHCR 镜像推送、Helm OCI 发布、Codecov 上传（没有 token/未在 Actions 上跑过） |
+| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR 成功、ci run #15 后端 build 成功（frontend 的 30s 超时已提到 60s，见 vite.config.ts）；**未验证**：Helm OCI 发布、Codecov 上传（没有 token） |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 
@@ -382,9 +382,9 @@ ae43506 feat: operator console - admin read API and a React UI
    chart 见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)，CI/CD 见
    [README 的 CI/CD 一节](../README.md#cicd每次-push-自动跑什么) 和 `.github/workflows/`。
    剩余工作按 [remaining-plan.md](remaining-plan.md)：**U（控制台小缺口）→ P（Python SDK）→
-   H（P3 性能）**。C 里有三件事**没有**验证过，不要当成已绿：GHCR 镜像推送、Helm OCI 发布、
-   Codecov 上传（仓库没有 `CODECOV_TOKEN`，步骤会跳过并打印原因）；`python-sdk.yml` 只是预置，
-   `sdk/python/` 还不存在。
+   H（P3 性能）**。C 的验证边界：GHCR 镜像已在 `docker` run #1 推送成功、`ci` run #15 的后端
+   build 成功；**没有验证**的是 Helm OCI 发布和 Codecov 上传（仓库没有 `CODECOV_TOKEN`，
+   步骤会跳过并打印原因）。`python-sdk.yml` 只是预置，`sdk/python/` 还不存在。
 10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

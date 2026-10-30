@@ -395,13 +395,13 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | 步骤与本机命令一致；**Codecov 上传未启用**（没有 `CODECOV_TOKEN`，步骤打印原因后跳过） |
-| [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | workflow 已就绪；本地 `npm run build:backend` 通过，但 `docker build` 卡在容器内 Maven 的 `dependency:go-offline`（本机网络，约 13 分钟无进展后放弃），**镜像没有构建完成、GHCR 没有推送** |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | run #15：后端 build 成功（164 单测 + JaCoCo + 69 IT），Codecov 步骤**按设计跳过**（没有 token）；前端 `test:coverage` 有 3 个用例在 2 核 runner 上超过 30s（runs 13–15），已把 `testTimeout` 提到 60s，修复后的运行见 Actions |
+| [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | workflow 已就绪；**没有实际 push 过**（需要 GHCR 权限） |
 | [sdk.yml](.github/workflows/sdk.yml) | `sdk/java/**` 变更 | Java SDK `mvn verify`（含 LINE ≥ 80% 门槛）+ javadoc | 已存在 |
 | [sdk-publish.yml](.github/workflows/sdk-publish.yml) | tag `sdk-v*` | `mvn deploy` 到 GitHub Packages | 已存在，**尚未实际发布** |
-| [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；任务 P 落地后自动生效 |
+| [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；首次添加时它曾因 workflow 文件自身触发而失败一次（没有 `sdk/python`），已把自身从触发路径移除，任务 P 落地后由 `sdk/python/**` 自动生效 |
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
 164 个测试的 **LINE 26.1%**（728/2786，另有 BRANCH 25.4%），报告在 `target/site/jacoco/`。
@@ -565,7 +565,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
   事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
   K8s/Helm 已就绪（[`helm/hookflow/`](helm/hookflow/README.md)），Prometheus + Grafana
   监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；CI/CD 流水线已就绪（见上文，
-  **GHCR 镜像、Helm OCI 发布和 Codecov 上传都没有实际验证过**）；剩余的是 Python SDK 和 P3 性能
+  **GHCR 镜像已在首次 push 验证；Helm OCI 发布和 Codecov 上传仍未验证**）；剩余的是 Python SDK 和 P3 性能
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
