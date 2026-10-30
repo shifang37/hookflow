@@ -1,0 +1,153 @@
+# Default values for the HookFlow chart.
+#
+# The three roles share one image and differ only in spring profile and port:
+#   api    8080  ingest + read API + actuator
+#   relay  8081  outbox -> broker
+#   worker 8082  broker -> customer endpoint
+#
+# Stateful dependencies (MySQL, RabbitMQ, Redis) are deliberately NOT in this
+# chart: point config.* at managed services, or at the compose stack for a local
+# demo. See README.md.
+
+image:
+  repository: ghcr.io/shifang37/hookflow
+  tag: "0.4.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount:
+  api: 2
+  relay: 1
+  worker: 2
+
+rolePorts:
+  api: 8080
+  relay: 8081
+  worker: 8082
+
+resources:
+  api:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  relay:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  worker:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 1536Mi
+
+# Non-secret environment shared by all roles. A ConfigMap is rendered from this.
+config:
+  dbHost: mysql
+  dbPort: 3306
+  dbName: hookflow
+  dbUser: hookflow
+  mqHost: rabbitmq
+  mqPort: 5672
+  mqUser: hookflow
+  redisHost: redis
+  redisPort: 6379
+  logLevel: INFO
+  # SSRF guard. Only a disposable cluster pointing at in-cluster demo services
+  # should turn this on; production endpoints must be public addresses.
+  egressAllowPrivateTargets: "false"
+  # /v1/demo/** has no authentication; keep it off outside a throwaway cluster.
+  demoEnabled: "false"
+  # Exporting OTLP traces/metrics is opt-in; the chart does not run a collector.
+  tracingEnabled: "true"
+  otlpExport: "false"
+
+# Secrets. Either let the chart create one from these values (dev), or point at
+# an existing Secret with keys HOOKFLOW_MASTER_KEY, HOOKFLOW_BOOTSTRAP_TOKEN,
+# DB_PASSWORD and MQ_PASSWORD (prod).
+secrets:
+  create: true
+  existingSecret: ""
+  masterKey: "hookflow-dev-master-key-change-in-production-32"
+  bootstrapToken: "hookflow-dev-bootstrap-token"
+  dbPassword: hookflow
+  mqPassword: hookflow
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: hookflow.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  relay:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  worker:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  # worker/relay can later switch to hookflow_outbox_backlog via a Prometheus
+  # Adapter; that adapter is cluster infrastructure and is not shipped here.
+
+podDisruptionBudget:
+  api:
+    enabled: true
+    minAvailable: 1
+  relay:
+    enabled: true
+    minAvailable: 1
+  worker:
+    enabled: true
+    minAvailable: 1
+
+probes:
+  startup:
+    periodSeconds: 2
+    failureThreshold: 30
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# 75s > lease 60s + read timeout 10s (see docs/operations.md). preStop lets the
+# Service stop routing to the pod before Spring starts its own shutdown.
+terminationGracePeriodSeconds: 75
+preStopSleepSeconds: 5
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -28,8 +28,9 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 前端单测 | **77 个通过**（15 个文件），~35s | `cd frontend && npm test` |
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
+| Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
-| 前端生产构建 | 通过，app chunk ≈ 51 kB（vendor 已拆分） | `npm run build:backend` |
+| 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
 前端构建产物会复制到 `src/main/resources/static/ui/`（已在 `.gitignore` 里，不入库）。
 后端从 `/ui/` 提供这个控制台，`/ui/events` 这类客户端路由由 `UiForwardController` 兜到 `index.html`。
@@ -251,14 +252,15 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | 项 | 状态 |
 |---|---|
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 发布 workflow 就绪但**尚未实际发布** |
-| P1 K8s / Helm | 完全没有 |
+| P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
 | P2 CI/CD | 前端 job 已加；Docker 镜像、Helm 发布、Codecov 未做 |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 
-⚠️ 路线图里 K8s 那节的 **actuator 端口**和 Grafana 那节的**指标名**之前是错的，已经修正过（端口统一 8080；
-指标名对齐了真实代码）。**别照着旧记忆写 9090 或在 PromQL 里用 `hookflow_deliveries_total`** —— 那个指标不存在。
+⚠️ 路线图里 K8s 那节的 **actuator 端口**和 Grafana 那节的**指标名**之前是错的，已经修正过：
+端口按角色是 **api 8080 / relay 8081 / worker 8082**（chart 的探针用各自角色端口）；
+指标名对齐真实代码。**别照着旧记忆写 9090 或在 PromQL 里用 `hookflow_deliveries_total`** —— 那个指标不存在。
 
 ### I. 一些小的历史遗留
 
@@ -360,10 +362,11 @@ ae43506 feat: operator console - admin read API and a React UI
 7. ~~F：`topFailureReasons` 无真实死信~~ —— 已完成：`FailureReasonsIT` 覆盖分组、百分比分母和 `LIMIT`，见 §4F。
 8. ~~G：V4 索引收益未量化~~ —— 已完成：图表查询 316 → 132 ms（2.4×），settle −10%、insert −7%，
    见 [performance.md §23](performance.md#23-v4-的索引图表查询快-24-倍settle-慢-10) 与 `docs/perf/2026-10-29-v4-index/`。
-9. **J（Java SDK）与 G（Grafana）已完成**：SDK 见 [`sdk/java/README.md`](../sdk/java/README.md)，
-   监控见 [monitoring.md](monitoring.md)。剩余工作按 [remaining-plan.md](remaining-plan.md)：
-   **K（K8s/Helm）→ C（CI/CD）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）**。
-   K 的 HPA 现在可以直接用 `hookflow_outbox_backlog` 自定义指标。
+9. **J（Java SDK）、G（Grafana）、K（K8s/Helm）已完成**：SDK 见
+   [`sdk/java/README.md`](../sdk/java/README.md)，监控见 [monitoring.md](monitoring.md)，
+   chart 见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)。剩余工作按
+   [remaining-plan.md](remaining-plan.md)：**C（CI/CD）→ U（控制台小缺口）→ P（Python SDK）→
+   H（P3 性能）**。
 10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。

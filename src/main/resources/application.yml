@@ -1,9 +1,18 @@
 server:
   port: ${SERVER_PORT:8080}
+  # Kubernetes sends SIGTERM, then waits terminationGracePeriodSeconds before
+  # SIGKILL. Graceful shutdown lets an in-flight HTTP request finish and lets the
+  # AMQP listener containers stop taking new messages first; the chart sizes the
+  # grace period above the 60s delivery lease (see helm/hookflow/README.md).
+  shutdown: graceful
 
 spring:
   application:
     name: hookflow
+  lifecycle:
+    # Must stay well under the chart's 75s terminationGracePeriodSeconds: this
+    # caps how long Spring waits for in-flight work after SIGTERM.
+    timeout-per-shutdown-phase: 30s
   profiles:
     default: all
   datasource:

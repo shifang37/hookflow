@@ -1,0 +1,27 @@
+{{- range $role := list "api" "relay" "worker" }}
+{{- $cfg := index $.Values.autoscaling $role }}
+{{- if $cfg.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "hookflow.fullname" $ }}-{{ $role }}
+  labels:
+    {{- include "hookflow.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "hookflow.fullname" $ }}-{{ $role }}
+  minReplicas: {{ $cfg.minReplicas }}
+  maxReplicas: {{ $cfg.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $cfg.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

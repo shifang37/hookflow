@@ -1,0 +1,19 @@
+{{- range $role := list "api" "relay" "worker" }}
+{{- $cfg := index $.Values.podDisruptionBudget $role }}
+{{- if $cfg.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "hookflow.fullname" $ }}-{{ $role }}
+  labels:
+    {{- include "hookflow.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+spec:
+  minAvailable: {{ $cfg.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "hookflow.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $role }}
+{{- end }}
+{{- end }}

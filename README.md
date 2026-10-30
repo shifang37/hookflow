@@ -439,6 +439,16 @@ docker compose --profile monitoring up -d     # Grafana http://localhost:3000（
 3 个预装面板（概览 / 投递详情 / JVM 与资源）和 2 条告警规则（outbox 积压持续增长、死信率 > 10%）。
 启动方式、面板口径、怎么制造一次死信告警见 [docs/monitoring.md](docs/monitoring.md)。
 
+### Kubernetes / Helm
+
+```bash
+helm install hookflow helm/hookflow -n hookflow --create-namespace -f helm/hookflow/values-dev.yaml
+```
+
+`api` / `relay` / `worker` 三个 Deployment 共用同一镜像，只有 api 有 Service/Ingress；
+readiness/liveness/startup 探针、75s 优雅停机、HPA、PDB 都在 chart 里。kind 上的完整步骤、
+「为什么滚动发布不会丢投递」和验收记录见 [helm/hookflow/README.md](helm/hookflow/README.md)。
+
 ### 分布式 trace（v0.3）
 
 一次投递横跨 api → outbox → relay → MQ → worker → 接收方。默认**不导出**（`mvn verify` 不能依赖 collector），打开方式：
@@ -528,8 +538,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - Python SDK 未提供；**Java SDK** 在 [`sdk/java/`](sdk/java/README.md)（独立的 Maven 项目，`mvn install` 后即可引用）
 - 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 增删改查（含软删除）、
   事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
-  剩余的是 K8s/Helm 这类外围（见 [docs/next-steps.md](docs/next-steps.md)）；Prometheus + Grafana
-  监控已就绪（[docs/monitoring.md](docs/monitoring.md)）
+  K8s/Helm 已就绪（[`helm/hookflow/`](helm/hookflow/README.md)），Prometheus + Grafana
+  监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；剩余的是 CI/CD 补完、Python SDK 和 P3 性能
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
@@ -546,7 +556,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；未开始：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；未开始：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
 
 **后续工作与优化计划**（含缺口清单、验收标准、预估工作量、环境坑汇总）：[docs/v0.4-plan.md](docs/v0.4-plan.md)。
 这份文档是给「下一个接手的人」看的，能独立读——包含当前基线、P1/P2/P3 任务、以及明确不做什么。
@@ -583,6 +593,14 @@ sdk/java/
 ├── pom.xml          独立 Maven 项目（Java 17，OkHttp + Jackson 2，JaCoCo 门槛 80%）
 ├── README.md        5 分钟接入、重试/幂等、接收方验签、GitHub Packages 引用
 └── src/             客户端、webhook 验签、MockWebServer 测试、可运行示例
+
+helm/hookflow/
+├── Chart.yaml       api/relay/worker 三角色，同镜像不同 profile
+├── values*.yaml     dev（kind）与 prod（HPA/PDB/Ingress/existingSecret）
+└── README.md        部署、验收、为什么滚动发布不丢投递
+
+deploy/kind/
+└── dependencies.yaml  kind 演示用 MySQL/RabbitMQ/Redis/接收方（不是 chart 的一部分）
 
 docs/
 ├── adr/             14 条架构决策（含 0009/0010/0011/0012/0013/0014）

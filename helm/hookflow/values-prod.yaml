@@ -1,0 +1,117 @@
+# Production-shaped overlay. It points at managed dependencies and an existing
+# Secret; nothing here is a credential.
+#
+#   kubectl -n hookflow create secret generic hookflow-secrets \
+#     --from-literal=HOOKFLOW_MASTER_KEY=... \
+#     --from-literal=HOOKFLOW_BOOTSTRAP_TOKEN=... \
+#     --from-literal=DB_PASSWORD=... \
+#     --from-literal=MQ_PASSWORD=...
+#   helm install hookflow helm/hookflow -n hookflow --create-namespace \
+#     -f helm/hookflow/values-prod.yaml
+
+replicaCount:
+  api: 3
+  relay: 2
+  worker: 3
+
+image:
+  tag: "0.4.0"
+  pullPolicy: IfNotPresent
+
+resources:
+  api:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  relay:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  worker:
+    requests:
+      cpu: "1"
+      memory: 1536Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+config:
+  # Replace with the managed endpoints for the target environment.
+  dbHost: mysql.prod.internal
+  dbPort: 3306
+  dbName: hookflow
+  dbUser: hookflow
+  mqHost: rabbitmq.prod.internal
+  mqPort: 5672
+  mqUser: hookflow
+  redisHost: redis.prod.internal
+  redisPort: 6379
+  logLevel: INFO
+  egressAllowPrivateTargets: "false"
+  demoEnabled: "false"
+  tracingEnabled: "true"
+  otlpExport: "false"
+
+secrets:
+  create: false
+  existingSecret: hookflow-secrets
+
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+  relay:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  worker:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  api:
+    enabled: true
+    minAvailable: 2
+  relay:
+    enabled: true
+    minAvailable: 1
+  worker:
+    enabled: true
+    minAvailable: 2
+
+# Keep replicas on different nodes when there is more than one.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: hookflow
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+  hosts:
+    - host: hookflow.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: hookflow-tls
+      hosts:
+        - hookflow.example.com

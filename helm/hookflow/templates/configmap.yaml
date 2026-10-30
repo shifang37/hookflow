@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hookflow.fullname" . }}-config
+  labels:
+    {{- include "hookflow.labels" . | nindent 4 }}
+data:
+  DB_HOST: {{ .Values.config.dbHost | quote }}
+  DB_PORT: {{ .Values.config.dbPort | quote }}
+  DB_NAME: {{ .Values.config.dbName | quote }}
+  DB_USER: {{ .Values.config.dbUser | quote }}
+  MQ_HOST: {{ .Values.config.mqHost | quote }}
+  MQ_PORT: {{ .Values.config.mqPort | quote }}
+  MQ_USER: {{ .Values.config.mqUser | quote }}
+  REDIS_HOST: {{ .Values.config.redisHost | quote }}
+  REDIS_PORT: {{ .Values.config.redisPort | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  HOOKFLOW_SECURITY_EGRESS_ALLOW_PRIVATE_TARGETS: {{ .Values.config.egressAllowPrivateTargets | quote }}
+  # /v1/demo/** is unauthenticated. Kubernetes is not a throwaway laptop.
+  HOOKFLOW_DEMO_ENABLED: {{ .Values.config.demoEnabled | quote }}
+  TRACING_ENABLED: {{ .Values.config.tracingEnabled | quote }}
+  OTLP_EXPORT: {{ .Values.config.otlpExport | quote }}

@@ -1,0 +1,51 @@
+name: helm
+
+# The chart is a deliverable on its own: lint and render it on every change so a
+# broken template cannot reach a cluster. A kind smoke test stays local (it needs
+# Docker + a few minutes); the chart README has the commands.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'helm/**'
+      - 'deploy/kind/**'
+      - '.github/workflows/helm.yml'
+  pull_request:
+    paths:
+      - 'helm/**'
+      - 'deploy/kind/**'
+      - '.github/workflows/helm.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint (dev values)
+        run: helm lint helm/hookflow -f helm/hookflow/values-dev.yaml
+
+      - name: Lint (prod values)
+        run: helm lint helm/hookflow -f helm/hookflow/values-prod.yaml
+
+      - name: Render (dev values)
+        run: helm template hookflow helm/hookflow -n hookflow -f helm/hookflow/values-dev.yaml > /tmp/hookflow-dev.yaml
+
+      - name: Render (prod values)
+        run: helm template hookflow helm/hookflow -n hookflow -f helm/hookflow/values-prod.yaml > /tmp/hookflow-prod.yaml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendered-manifests
+          path: /tmp/hookflow-*.yaml
+          if-no-files-found: ignore

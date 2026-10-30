@@ -1,0 +1,33 @@
+HookFlow is installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+  API service:   {{ include "hookflow.fullname" . }}-api:{{ .Values.service.port }}
+  Relay pods:    {{ .Values.replicaCount.relay }}
+  Worker pods:   {{ .Values.replicaCount.worker }}
+  Demo routes:   {{ .Values.config.demoEnabled }} (keep "false" outside a throwaway cluster)
+
+{{- if .Values.ingress.enabled }}
+  Ingress host:  {{ (first .Values.ingress.hosts).host }}
+{{- else }}
+  Reach the API without an Ingress:
+
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "hookflow.fullname" . }}-api 8080:{{ .Values.service.port }}
+{{- end }}
+
+  Watch the rollout:
+
+    kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "hookflow.fullname" . }}-api
+    kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "hookflow.fullname" . }}-relay
+    kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "hookflow.fullname" . }}-worker
+
+{{- if or .Values.autoscaling.api.enabled .Values.autoscaling.relay.enabled .Values.autoscaling.worker.enabled }}
+
+  HPA enabled:
+  {{- if .Values.autoscaling.api.enabled }} api {{ .Values.autoscaling.api.minReplicas }}..{{ .Values.autoscaling.api.maxReplicas }}{{- end }}
+  {{- if .Values.autoscaling.relay.enabled }}, relay {{ .Values.autoscaling.relay.minReplicas }}..{{ .Values.autoscaling.relay.maxReplicas }}{{- end }}
+  {{- if .Values.autoscaling.worker.enabled }}, worker {{ .Values.autoscaling.worker.minReplicas }}..{{ .Values.autoscaling.worker.maxReplicas }}{{- end }}.
+  The cluster needs a metrics-server for CPU targets to work.
+{{- end }}
+
+  Deliveries survive a rollout: leases are 60s, terminationGracePeriodSeconds is
+  {{ .Values.terminationGracePeriodSeconds }}s, and an attempt that cannot settle is reclaimed and retried.
+  Details: helm/hookflow/README.md#why-a-rolling-update-does-not-lose-deliveries

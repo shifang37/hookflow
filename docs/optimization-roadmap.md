@@ -1214,6 +1214,11 @@ git push origin sdk-v0.1.0
 
 ## P1：K8s 部署
 
+> **状态（2026-10-30）**：已完成。chart 在 [`helm/hookflow/`](../helm/hookflow/)，
+> 三角色同镜像（api/relay/worker），kind 上实测滚动更新不丢投递、force-kill worker 后
+> lease 回收重投、HPA 1→3。部署/验收细节见 [helm/hookflow/README.md](../helm/hookflow/README.md)。
+> 有状态依赖不在 chart 里；kind 演示用 `deploy/kind/dependencies.yaml`。
+
 ### 现状问题
 
 - 只有 Docker Compose 方案，无法水平扩展
@@ -1633,11 +1638,11 @@ helm uninstall hookflow --namespace hookflow
 
 ### 验收标准
 
-- [ ] 支持 Helm 一键部署
-- [ ] 有完整的 README 和部署文档
-- [ ] 支持 HPA 自动扩缩容
-- [ ] 健康检查和优雅关闭
-- [ ] 至少 2 种环境配置（dev/prod）
+- [x] 支持 Helm 一键部署（`helm install ... -f values-dev.yaml`，kind 实测）
+- [x] 有完整的 README 和部署文档（[helm/hookflow/README.md](../helm/hookflow/README.md)）
+- [x] 支持 HPA 自动扩缩容（CPU 70%，kind 上 1→3）
+- [x] 健康检查和优雅关闭（readiness/liveness/startup + `server.shutdown=graceful` + 75s grace）
+- [x] 至少 2 种环境配置（`values-dev.yaml` / `values-prod.yaml`）
 
 ---
 

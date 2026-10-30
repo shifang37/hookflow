@@ -7,7 +7,8 @@
 > **执行顺序：J（Java SDK）→ K（K8s/Helm）→ G（Grafana）→ C（CI/CD 补完）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）**。
 > **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)）。
 > **G 也已完成**（2026-10-29，见 [`docs/monitoring.md`](monitoring.md)）：3 个面板、2 条告警、两个指标缺口已补，告警实测触发。
-> 下一步是 **K（K8s/Helm）**；G 的指标（`hookflow_outbox_backlog`）已经可以作为 HPA 的自定义指标。
+> **K 也已完成**（2026-10-30，见 [`helm/hookflow/`](../helm/hookflow/)）：kind 实测滚动更新/杀 worker/HPA。
+> 下一步是 **C（CI/CD 补完）**。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -23,6 +24,7 @@
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
 | 监控栈 | Prometheus + Grafana，**3 个面板 / 2 条告警** | `docker compose --profile monitoring up -d`（详见 [monitoring.md](monitoring.md)） |
+| Helm chart | `helm lint` dev/prod 0 failed；kind 上三角色 Ready | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
 | 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck; npm run lint` |
 | 前端生产构建 | 通过（app chunk ≈ 57 kB） | 见 §9 的 TEMP 绕法后 `npm run build:backend` |
 | 已有 ADR | 15 条 | `docs/adr/` |
@@ -30,7 +32,7 @@
 最近 10 个 commit（`git log --oneline -10`）：控制台、测试拆分、Endpoint 删除、事件详情/批量重放、
 请求层测试、V4 索引 benchmark。**master 已推送到 GitHub，工作区应当是干净的**。
 
-路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 的 Java SDK 与 Grafana 已完成（K8s 未开始）**，
+路线图里 **P0 两项（前端可视化、管理后台）基本完成**，**P1 三项（Java SDK / K8s / Grafana）全部完成**，
 **P2 只完成了 CI 的测试部分**，**P3 目标未达**。详细对照见 §11。
 
 ---
@@ -334,6 +336,11 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ## 3. 任务 K：K8s + Helm（2–3 天，依赖 G 的指标做 HPA）
 
+> **状态：已完成（2026-10-30）**。chart 在 [`helm/hookflow/`](../helm/hookflow/)，
+> 部署/验收说明见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)；演示依赖在
+> [`deploy/kind/dependencies.yaml`](../deploy/kind/dependencies.yaml)。本机 kind 实测：
+> force-kill worker 后 attempt 2 成功、滚动更新期间 46 条投递全部成功、HPA 1→3。
+
 目标：一个 Helm chart，一条命令在 `kind`/`minikube` 上起三副本，滚动发布不丢投递。
 
 **决策**：
@@ -354,12 +361,27 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 - 迁移：Flyway 自带锁，多个 pod 同时启动是安全的；更干净的做法是 initContainer/Job 先迁移，写进文档。
 
 **验收**（路线图 optimization-roadmap.md L1616 的验收标准 + 本项目补充）：
-- [ ] `helm lint` + `helm template` 在 CI 里绿
-- [ ] `kind` 上 `helm install` 成功，`kubectl rollout status` 绿，`/actuator/health/readiness` 200
-- [ ] `kubectl delete pod` 一个 worker → 在途投递不丢（lease 过期后重投，最多 60s）
-- [ ] 滚动更新（改镜像 tag）期间持续发事件 → 无丢失（用 `endpoint.delay` 或慢接收方制造在途）
-- [ ] HPA 在压测下扩到 ≥2（哪怕用手工 `kubectl` 打 CPU）
-- [ ] `values-dev.yaml` / `values-prod.yaml` 两套；README 一节「为什么滚动发布不会丢投递」
+- [x] `helm lint` + `helm template` 在 CI 里绿（`.github/workflows/helm.yml`；本地 dev/prod 均 0 failed）
+- [x] `kind` 上 `helm install` 成功，`kubectl rollout status` 绿，`/actuator/health/readiness` 200
+- [x] force-kill worker → 在途投递不丢：attempt 1 被 lease 回收，约 65s 后 attempt 2 SUCCEEDED
+- [x] 滚动更新 worker + relay 期间持续发 40 条事件 → **46 SUCCEEDED / 0 DEAD**（`order.paid` 口径）
+- [x] HPA 在压测下从 1 扩到 **3**（CPU 191% / 目标 70%，metrics-server）
+- [x] `values-dev.yaml` / `values-prod.yaml` 两套；README 有「为什么滚动发布不会丢投递」
+
+**实现说明 / 与草稿的差异**：
+
+- 三角色同镜像、三个 Deployment（`api`/`relay`/`worker`），只有 api 有 Service + 可选 Ingress；
+  relay/worker 的 actuator 端口分别是 8081/8082。
+- 探针：startup/readiness 用 `/actuator/health/readiness`，liveness 用 `/actuator/health/liveness`；
+  `terminationGracePeriodSeconds=75` + `preStop sleep 5`，并给 `application.yml` 补了
+  `server.shutdown=graceful` 与 `spring.lifecycle.timeout-per-shutdown-phase=30s`。
+- HPA 默认 CPU：api 2–6、worker 2–8、relay 1–3（relay 默认关）；PDB 每角色至少 1。
+  换 `hookflow_outbox_backlog` 自定义指标需要 Prometheus Adapter，chart 不内置，文档已说明。
+- 有状态依赖不进 chart；kind 演示用 `deploy/kind/dependencies.yaml`。因为演示 endpoint 在集群内，
+  dev overlay 打开 `egressAllowPrivateTargets`（生产保持 false）。
+- 本机 Docker 构建容器访问不了 Maven，验收镜像用宿主机 jar + 同 JRE 构建；仓库 Dockerfile 未改。
+- `kind load docker-image` 在 Docker 29/containerd image store 上会失败，README 给了
+  `docker save` + `ctr import` 的替代路径。
 
 ---
 
@@ -493,7 +515,7 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 | P0 前端可视化 | ✅ 基本完成（缺投递详情、移动端验证） | U-1 |
 | P0 管理后台 | ✅ 基本完成（缺租户状态、Endpoint 测试、告警/设置） | U-2、U-3 |
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
-| P1 K8s / Helm | ❌（有 Dockerfile/compose 底座） | K |
+| P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |
 | P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |
 | P2 CI/CD | ◐（测试流水线有，Codecov/镜像/Helm/徽章无） | C |
 | P2 Python SDK | ❌ | P |

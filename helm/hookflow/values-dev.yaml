@@ -1,0 +1,94 @@
+# Local kind / single-node overlay.
+#
+#   kind create cluster --name hookflow
+#   kind load docker-image hookflow:dev --name hookflow
+#   kubectl apply -f deploy/kind/dependencies.yaml
+#   helm install hookflow helm/hookflow -n hookflow --create-namespace -f helm/hookflow/values-dev.yaml
+#
+# Secrets here are development values. Do not copy them to a shared cluster.
+
+replicaCount:
+  api: 1
+  relay: 1
+  worker: 2
+
+image:
+  # `docker build -t hookflow:dev .` + direct import into kind (kind load has a
+  # Docker 29/containerd issue). Keep the repository name short so it matches.
+  repository: hookflow
+  tag: dev
+  pullPolicy: IfNotPresent
+
+resources:
+  api:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+  relay:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+  worker:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+config:
+  dbHost: mysql
+  dbPort: 3306
+  dbName: hookflow
+  dbUser: hookflow
+  mqHost: rabbitmq
+  mqPort: 5672
+  mqUser: hookflow
+  redisHost: redis
+  redisPort: 6379
+  logLevel: INFO
+  # The smoke test delivers to the in-cluster demo-receiver, which the default
+  # SSRF guard refuses. This is exactly why it is a dev-only value.
+  egressAllowPrivateTargets: "true"
+  demoEnabled: "false"
+  tracingEnabled: "true"
+  otlpExport: "false"
+
+secrets:
+  create: true
+  masterKey: "hookflow-dev-master-key-change-in-production-32"
+  bootstrapToken: "hookflow-dev-bootstrap-token"
+  dbPassword: hookflow
+  mqPassword: hookflow
+
+# kind has no metrics-server by default. Leaving the api HPA on is harmless
+# (it reports <unknown> until metrics-server exists) and lets the acceptance
+# test turn it on with a one-line patch.
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  relay:
+    enabled: false
+  worker:
+    enabled: false
+
+# One replica per role in dev: a PDB with minAvailable=1 would block drains.
+podDisruptionBudget:
+  api:
+    enabled: false
+  relay:
+    enabled: false
+  worker:
+    enabled: false
+
+ingress:
+  enabled: false

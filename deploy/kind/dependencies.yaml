@@ -1,0 +1,269 @@
+# Demo-only stateful dependencies for a local kind cluster.
+#
+# These are NOT part of the Helm chart (see helm/hookflow/README.md): a real
+# installation points at managed MySQL/RabbitMQ/Redis. This file exists so the
+# kind smoke test is reproducible on one machine.
+#
+#   kubectl apply -f deploy/kind/dependencies.yaml
+#
+# Everything uses emptyDir: deleting the pods loses the data, which is the
+# point of a demo stack.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hookflow
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: hookflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.4
+          args:
+            - --innodb-flush-log-at-trx-commit=1
+            - --max-connections=200
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+            - name: MYSQL_DATABASE
+              value: hookflow
+            - name: MYSQL_USER
+              value: hookflow
+            - name: MYSQL_PASSWORD
+              value: hookflow
+          ports:
+            - name: mysql
+              containerPort: 3306
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uhookflow -phookflow"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: hookflow
+spec:
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: hookflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4-management
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: hookflow
+            - name: RABBITMQ_DEFAULT_PASS
+              value: hookflow
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: hookflow
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: hookflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          args: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "allkeys-lru"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: hookflow
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+# A tiny receiver for the delivery smoke test. POST /slow/3 sleeps three
+# seconds; POST /fail returns 500; anything else returns 200. It is not part of
+# the chart either.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-receiver
+  namespace: hookflow
+data:
+  receiver.py: |
+    import time
+    # ThreadingHTTPServer matters: the worker opens several concurrent attempts,
+    # and a single-threaded server would serialise the sleep and look like a slow
+    # receiver that times out.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            if self.path.startswith("/slow/"):
+                time.sleep(float(self.path.split("/")[2]))
+            status = 500 if self.path.startswith("/fail") else 200
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-receiver
+  namespace: hookflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-receiver
+  template:
+    metadata:
+      labels:
+        app: demo-receiver
+    spec:
+      containers:
+        - name: receiver
+          image: python:3.12-slim
+          command: ["python", "/app/receiver.py"]
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        - name: script
+          configMap:
+            name: demo-receiver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-receiver
+  namespace: hookflow
+spec:
+  selector:
+    app: demo-receiver
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
