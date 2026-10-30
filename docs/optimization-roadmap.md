@@ -1781,8 +1781,8 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      后端 build 在 runs #15–#17 成功；前端 coverage 仍红：runs 13–16 是 30s 超时，提到 60s 后 run #17
-      以进程级 exit 1 结束（无失败测试注解，疑似内存），已加 4GB Node 堆与 `github-actions` reporter
+      后端 build 在 runs #15–#17 成功；前端 run #17/#18 的 exit 1 已定位为 Vitest 3 的
+      `[vitest-worker]: Timeout calling onTaskUpdate`（77 个测试其实全过），已升级 Vitest 4.1.12
 - [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`

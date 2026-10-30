@@ -444,9 +444,9 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
       文件自身在触发路径里而失败一次（run #1，没有 `sdk/python`），已把自身从触发路径移除。
 
 **完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「master 自动构建镜像」「README 徽章」
-已生效（docker run #1 推送 GHCR 成功；ci runs #15–#17 后端 build 成功）。前端 coverage 仍红：
-runs 13–16 是 30s 超时，把全局与两个 create 测试都提到 60s 后 run #17 以进程级 exit 1 结束
-（无失败测试注解，疑似内存），已加 4GB Node 堆与 `github-actions` reporter。「Codecov 上传」
+已生效（docker run #1 推送 GHCR 成功；ci runs #15–#17 后端 build 成功）。前端 run #17/#18 的
+exit 1 已定位：77 个测试全过，但 Vitest 3 报 2 个 `[vitest-worker]: Timeout calling onTaskUpdate`
+unhandled error；已升级 Vitest 4.1.12（本地 77 过、无 unhandled error）。「Codecov 上传」
 「tag 发布 Helm」的 workflow 已写好，但**没有 token / 没有在 Actions 上验证**，不能声称已绿。
 Python job 只是预置。
 验收对照见 [optimization-roadmap.md](optimization-roadmap.md) P2 的「实现位置」。

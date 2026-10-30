@@ -395,7 +395,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | 后端 build 在 runs #15–#17 成功（164 单测 + JaCoCo + 69 IT），Codecov 步骤**按设计跳过**（没有 token）；前端 coverage 仍红：runs 13–16 是 30s 超时，把全局和两个 create 测试都提到 60s 后 run #17 仍以进程级 exit 1 结束（没有失败测试注解，疑似内存），已加 `NODE_OPTIONS=--max-old-space-size=4096` 和 `github-actions` reporter，最新结果见 Actions |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | 后端 build 在 runs #15–#17 成功（164 单测 + JaCoCo + 69 IT），Codecov 步骤**按设计跳过**（没有 token）；前端 run #17/#18 失败原因已定位：**77 个测试全过，但 Vitest 3 报 2 个 `[vitest-worker]: Timeout calling onTaskUpdate` unhandled error 导致 exit 1**，已升级 Vitest 4.1.12（本地 77 过、无 unhandled error）并加 `github-actions` reporter，最新结果见 Actions |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | workflow 已就绪；**没有实际 push 过**（需要 GHCR 权限） |

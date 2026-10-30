@@ -26,21 +26,28 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 后端单测 | **164 个通过** | `./mvnw -o test` |
 | 后端单测覆盖率 | **LINE 26.1%**（728/2786）、BRANCH 25.4%，仅单测；IT 不采集 | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **77 个通过**（15 个文件），~35s | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
+| 前端单测 | **77 个通过**（15 个文件），~34s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 69.16% / 分支 73.41% / 函数 59.36% / 行 67.87%，~70s（Vitest 4 的 V8 口径，比 3.x 更严格） | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
-| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 构建并推送 GHCR 成功、`ci` runs #15–#17 后端 build 成功；**仍红**：前端 coverage（run #17 进程级 exit 1，已加 4GB 堆）；**未验证**：Helm OCI 发布、Codecov 上传 | `.github/workflows/` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 构建并推送 GHCR 成功、`ci` runs #15–#17 后端 build 成功；前端 exit 1 已定位到 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4；**未验证**：Helm OCI 发布、Codecov 上传 | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
 前端构建产物会复制到 `src/main/resources/static/ui/`（已在 `.gitignore` 里，不入库）。
 后端从 `/ui/` 提供这个控制台，`/ui/events` 这类客户端路由由 `UiForwardController` 兜到 `index.html`。
 
+> **2026-10-30：Vitest 3.2.7 → 4.1.12**。CI 上 77 个测试全过，但 Vitest 3 抛 2 个
+> `[vitest-worker]: Timeout calling "onTaskUpdate"` 的 unhandled error，进程以 exit 1 结束
+> （runs #17/#18）。升级到 4.1.12 后本地 `CI=true npm run test:coverage` 无 unhandled error。
+> 4.x 的 V8 remap 比 3.x 严格，前端覆盖率数字从 85.62/82.83/62.13 变为 69.16/73.41/59.36；
+> 本文 §4E 等历史段落里的旧百分比是 Vitest 3 口径，不能直接和新数字比较。
+
 > 2026-10-30 复跑时 `ReadApiIT.latencyHistogramIsComplete` 第一次失败（`samples=3809`、`buckets=3803`）：
 > `ReportService.latency` 的 samples 与 buckets 是两条 SQL，期间后台 worker 写入了 6 行。单独复跑
 > `ReadApiIT`（17 个）和整套 `verify`（69 个）都通过。这是既有的时间窗竞态，不是任务 C 引入的；
-> 要根治得让两条查询读同一个快照，暂未改。
+> 要根治得让两条查询读同一个快照，暂未改。CI run #18 另有一次 `ReadApiIT.setUp` 的
+> `DeadlockLoserDataAccess` 偶发失败，也是同类并发 flake。
 
 ---
 
@@ -261,7 +268,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 发布 workflow 就绪但**尚未实际发布** |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
-| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR 成功、ci runs #15–#17 后端 build 成功；**仍红**：前端 coverage（runs 13–16 超时、run #17 进程级 exit 1，已加 60s 超时 + 4GB 堆）；**未验证**：Helm OCI 发布、Codecov 上传（没有 token） |
+| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR 成功、ci runs #15–#17 后端 build 成功；**已定位并修复**：前端 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error（77 个测试全过），已升级 Vitest 4.1.12；**未验证**：Helm OCI 发布、Codecov 上传（没有 token） |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 
