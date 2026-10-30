@@ -10,7 +10,8 @@
 > **K 也已完成**（2026-10-30，见 [`helm/hookflow/`](../helm/hookflow/)）：kind 实测滚动更新/杀 worker/HPA。
 > **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
 > GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
-> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #15 的后端 build 成功。
+> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（build 一次
+> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过）。
 > **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
 > 下一步是 **U（控制台小缺口）**。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
@@ -444,11 +445,10 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
       文件自身在触发路径里而失败一次（run #1，没有 `sdk/python`），已把自身从触发路径移除。
 
 **完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「master 自动构建镜像」「README 徽章」
-已生效（docker run #1 推送 GHCR 成功；ci runs #15–#17 后端 build 成功）。前端 run #17/#18 的
-exit 1 已定位：77 个测试全过，但 Vitest 3 报 2 个 `[vitest-worker]: Timeout calling onTaskUpdate`
-unhandled error；已升级 Vitest 4.1.12（本地 77 过、无 unhandled error）。「Codecov 上传」
-「tag 发布 Helm」的 workflow 已写好，但**没有 token / 没有在 Actions 上验证**，不能声称已绿。
-Python job 只是预置。
+已生效（docker run #1 推送 GHCR 成功；ci run #20 绿，build 一次 flake 后重跑）。前端 run #17/#18
+的 exit 1 已修复：Vitest 3 的 `onTaskUpdate` unhandled error（77 个测试全过）→ 升级 Vitest 4.1.12，
+并把 AppShell 的 20s 显式超时统一到 60s。「Codecov 上传」「tag 发布 Helm」的 workflow 已写好，
+但**没有 token / 没有在 Actions 上验证**，不能声称已绿。Python job 只是预置。
 验收对照见 [optimization-roadmap.md](optimization-roadmap.md) P2 的「实现位置」。
 
 验收 = 路线图 optimization-roadmap.md P2「验收标准」的 5 条，逐条能指到一个 workflow 步骤。

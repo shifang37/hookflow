@@ -1758,8 +1758,8 @@ hookflow_outbox_backlog
 ## P2：CI/CD 完善
 
 > **状态（2026-10-30）**：已实现，见下方「实现位置」。`docker` run #1 已在真实 Actions 上
-> 构建并推送 GHCR，`ci` run #15 的后端 build 成功；**Helm OCI 发布和 Codecov 上传还没有验证**，
-> 不要标成已绿。
+> 构建并推送 GHCR；`ci` run #20 绿（build 一次 flake 后重跑通过）。**Helm OCI 发布和 Codecov
+> 上传还没有验证**，不要标成已绿。
 
 ### 现状问题（v0.4 之前）
 
@@ -1781,8 +1781,8 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      后端 build 在 runs #15–#17 成功；前端 run #17/#18 的 exit 1 已定位为 Vitest 3 的
-      `[vitest-worker]: Timeout calling onTaskUpdate`（77 个测试其实全过），已升级 Vitest 4.1.12
+      run #20 绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
+      曾由 Vitest 3 的 `onTaskUpdate` unhandled error 引起（77 个测试其实全过），已升级 Vitest 4.1.12
 - [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
