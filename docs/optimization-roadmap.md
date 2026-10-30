@@ -3,8 +3,12 @@
 ## 文档目的
 
 本文档面向**校招/实习求职场景**，列出 HookFlow 项目的优化方向、技术选型和实施计划。
-当前项目已具备**生产级后端架构**（141 个测试、14 条 ADR、完整的故障恢复机制），
-但在**产品化**和**可演示性**方面仍有提升空间。
+当前项目已具备**生产级后端架构**（后端 233 个测试、15 条 ADR、完整的故障恢复机制），
+并在前端控制台、Java SDK、K8s 和监控上完成了大部分产品化工作。
+
+> **状态同步（2026-10-30）**：以下勾选已按当前 `master`（`78dd725`）复核；
+> 完成度速览见下一节。当前基线：后端 164 单测 + 69 集成、前端 77、Java SDK 66，
+> 共 376 个测试；15 条 ADR。
 
 **核心原则**：
 - ✅ 优先提升**可视化**和**易用性**（面试时更容易展示）
@@ -29,9 +33,32 @@
 
 ---
 
+## 完成度速览（2026-10-30）
+
+| 优化项 | 状态 | 验收 | 说明 |
+|---|---|---|---|
+| P0 前端可视化 | 🟡 基本完成 | 5/6 | 5 个页面、2s 轮询、图表、覆盖率达标；移动端未实测 |
+| P0 管理后台 | 🟡 基本完成 | 3/5 | 主要 CRUD 可在 UI 完成；无登录、租户停用/删除、Endpoint 测试、告警/设置 |
+| P1 Java SDK | 🟢 已实现，未发布 | 5/6 | 66 测试、行覆盖 92.9%；未发布到 GitHub Packages / Maven Central |
+| P1 K8s 部署 | ✅ 已完成 | 5/5 | Helm chart、HPA、探针、优雅停机，kind 实测 |
+| P1 监控面板 | ✅ 已完成 | 4/4 | 3 个面板、2 条告警、compose `monitoring` profile |
+| P2 CI/CD | 🟠 大部分完成 | 4/5 | CI / Docker / Helm 均已验证；Codecov 上传未启用 |
+| P2 Python SDK | ❌ 未开始 | 0/6 | `sdk/python/` 不存在，workflow 仅是预置 |
+| P3 性能优化 | 🟠 部分完成 | 3/4 | 多轮优化 + 报告；455–470/s，2000/s 目标未达 |
+
+> 「验收」列是本节验收标准的勾选数；未勾选但已部分实现的条目在「说明」里写了缺口。
+
+---
+
 ## P0：前端可视化（最高优先级）
 
-### 现状问题
+> **状态（2026-10-30）**：基本完成。运营控制台在 [`frontend/`](../frontend/)，
+> React 18 + TypeScript + Vite + Ant Design + React Query + Zustand + Recharts；
+> 生产构建由后端从 `/ui/` 提供。5 个页面（事件流 / 投递 / Endpoints / 租户 / 系统监控）
+> 都接真实接口，事件流 2s 轮询，前端 77 个测试、语句覆盖 69.16%。
+> 缺口：移动端未实测；单条投递详情抽屉未接（后端 `GET /v1/deliveries/{id}` 已有）。
+
+### 立项时的现状问题（已解决）
 
 - 演示控制台是纯 HTML + 原生 JS，无构建流程
 - UI 样式简单，缺少现代感
@@ -292,12 +319,12 @@ cd frontend && npm run build
 
 ### 验收标准
 
-- [ ] 使用 React + TypeScript + Vite 搭建
-- [ ] 至少包含 4 个页面：事件流、投递详情、租户管理、系统监控
-- [ ] 实时刷新（轮询间隔 ≤ 3s 或 WebSocket）
-- [ ] 至少 1 个交互式图表（延迟分布或吞吐趋势）
-- [ ] 响应式设计，支持移动端查看
-- [ ] 单元测试覆盖率 ≥ 50%（Jest + React Testing Library）
+- [x] 使用 React + TypeScript + Vite 搭建
+- [x] 至少包含 4 个页面：事件流、投递详情、租户管理、系统监控（另有 Endpoints 页；投递页目前是列表/状态/重放，单条 attempt 详情抽屉未接）
+- [x] 实时刷新（事件流 2s、投递 3s 轮询；满足 ≤3s）
+- [x] 至少 1 个交互式图表（吞吐折线 + 延迟分布，Recharts）
+- [ ] 响应式设计，支持移动端查看 —— 布局已做断点（侧栏折叠、卡片栅格、表格横向滚动），但没有移动端实测
+- [x] 单元测试覆盖率 ≥ 50%（Vitest + Testing Library；语句 69.16%，行 67.87%）
 
 ### 参考资料
 
@@ -309,7 +336,14 @@ cd frontend && npm run build
 
 ## P0：管理后台
 
-### 现状问题
+> **状态（2026-10-30）**：基本完成。租户、Endpoint、API Key、事件和监控都能在
+> [`frontend/`](../frontend/) 操作；读接口与租户策略更新在
+> [`AdminConsoleController.java`](../src/main/java/dev/hookflow/api/AdminConsoleController.java)，
+> 开通与 Key 轮换在 [`AdminController.java`](../src/main/java/dev/hookflow/api/AdminController.java)。
+> 缺口：没有登录体系（用 Bootstrap Token + 租户 API Key），没有租户停用/删除、
+> Endpoint 测试发送、告警阈值和系统设置页。
+
+### 立项时的现状问题（已解决）
 
 - 只有 REST API，没有可视化管理界面
 - 租户开通、API Key 生成需要用 curl
@@ -721,11 +755,11 @@ public class SecurityConfig {
 
 ### 验收标准
 
-- [ ] 至少 5 个页面：租户列表、租户详情、创建租户、Endpoint 管理、监控大盘
-- [ ] 所有 CRUD 操作可通过 UI 完成，无需 curl
-- [ ] 有基础的权限控制（需登录）
-- [ ] 至少 1 个统计报表（租户级或系统级）
-- [ ] 表单有客户端和服务端双重验证
+- [x] 至少 5 个页面：租户列表、租户详情、创建租户、Endpoint 管理、监控大盘（详情和创建是抽屉/弹窗，不是独立路由）
+- [ ] 所有 CRUD 操作可通过 UI 完成，无需 curl —— 现有资源均可增删改查；但租户删除/停用、Endpoint 测试发送没有做
+- [ ] 有基础的权限控制（需登录）—— 现在是 Bootstrap Token / 租户 API Key 鉴权，没有登录、账号和角色
+- [x] 至少 1 个统计报表（租户级 + 系统级）
+- [x] 表单有客户端和服务端双重验证
 
 ---
 
@@ -1757,9 +1791,9 @@ hookflow_outbox_backlog
 
 ## P2：CI/CD 完善
 
-> **状态（2026-10-30）**：已实现，见下方「实现位置」。`docker` run #1 已推送 GHCR；`ci` run #20
-> 绿（build 一次 flake 后重跑通过）；`helm-v0.1.0` 已发布 OCI chart。**只剩 Codecov 上传没有
-> 验证**（没有 token），不要标成已绿。
+> **状态（2026-10-30）**：大部分完成，见下方「实现位置」。当前 HEAD（`78dd725`）的 `ci` run #22
+> 绿；`docker` run #8 已成功构建并推送 GHCR；`helm-v0.1.0` 的 `helm-publish` run #1 已发布
+> OCI chart。**只剩 Codecov 上传没有验证**（没有 token，步骤按设计跳过），不要标成已绿。
 
 ### 现状问题（v0.4 之前）
 
@@ -1781,12 +1815,13 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      run #20 绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
+      当前 HEAD 的 run #22 绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
       曾由 Vitest 3 的 `onTaskUpdate` unhandled error 引起（77 个测试其实全过），已升级 Vitest 4.1.12
-- [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
-      **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
+- [ ] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
+      **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`），
+      因此这条不能算完成
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
-      再 buildx 推 `ghcr.io/shifang37/hookflow`）。**run #1 已成功构建并推送 GHCR**
+      再 buildx 推 `ghcr.io/shifang37/hookflow`）。**run #8 已成功构建并推送 GHCR**
 - [x] 打 tag 自动发布 Helm Chart —— `helm-publish.yml`（tag `helm-v*`，`helm package --version <tag>` 后推
       `oci://ghcr.io/shifang37/charts`）。**`helm-v0.1.0` run #1 已成功推送，chart 可匿名拉取**
 - [x] README 显示 CI 状态徽章 —— 换成 GitHub Actions 实时徽章（CI / Docker / Helm / Java SDK）
@@ -1805,12 +1840,15 @@ hookflow_outbox_backlog
 本机能验证的是：`./mvnw -o -Pcoverage test`（164 个通过，LINE 26.1%，仅单测）、
 `helm package`/`helm lint`、前端 77 个测试与 `npm run build:backend`。
 `docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
-但 **GitHub Actions 的 `docker` run #1 已经成功构建并推送 GHCR**。
+但 **GitHub Actions 的 `docker` run #8 已经成功构建并推送 GHCR**。
 Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；只剩 Codecov 上传未验证，本地无法伪造。
 
 ---
 
 ## P2：Python SDK
+
+> **状态（2026-10-30）**：未开始。`sdk/python/` 不存在；[`python-sdk.yml`](../.github/workflows/python-sdk.yml)
+> 只是预置，路径过滤使它现在不会运行。以下 6 条验收全部未完成。
 
 ### 现状问题
 
@@ -1878,7 +1916,12 @@ hookflow-python-sdk/
 
 ## P3：性能优化
 
-### 现状问题
+> **状态（2026-10-30）**：部分完成。已做至少 5 轮优化（A2 批量入口、B4 relay 批量发布、
+> B5/B7/B8 worker 并发与 relay batch、V4 索引），报告在 [performance.md](performance.md)，
+> 原始输出在 [`perf/`](perf/)。当前端到端 455–470 events/s（450 到达率），900 到达率时
+> 382–421/s；**2000 events/s 目标未达到**。
+
+### 立项时的现状问题（已部分解决）
 
 - 当前吞吐量约 **500 events/s**（单机）
 - 未针对高并发场景优化
@@ -1931,10 +1974,10 @@ spring:
 
 ### 验收标准
 
-- [ ] 完成至少 3 轮优化迭代
-- [ ] 提供压测报告（吞吐量、P99 延迟）
-- [ ] 文档记录每次优化的效果
-- [ ] 吞吐量达到 2000 events/s（单机）
+- [x] 完成至少 3 轮优化迭代（A2 / B4 / B5 / B7-B8 / V4 索引）
+- [x] 提供压测报告（吞吐量、P99 延迟；[performance.md](performance.md) + [`perf/`](perf/) 原始输出）
+- [x] 文档记录每次优化的效果
+- [ ] 吞吐量达到 2000 events/s（单机）—— 当前最好 455–470/s，未达标
 
 ---
 
@@ -1948,11 +1991,15 @@ spring:
 4. **第 4 周**（可选）：P2 CI/CD + Python SDK
 5. **第 5 周**（可选）：P3 性能优化
 
+> **实际进度（2026-10-30）**：P0 两项基本完成；P1 三项完成（Java SDK 仅差发布）；
+> P2 CI/CD 完成 4/5，Python SDK 未开始；P3 完成 3/4 条验收，2000 events/s 目标未达。
+> 剩余任务按 [remaining-plan.md](remaining-plan.md) 的 U → P → H 执行。
+
 ### 最小可演示版本（MVP）
 
 如果时间紧张，只做以下 3 项即可：
 - ✅ P0 前端可视化（证明全栈能力）
-- ✅ P1 Java SDK（证明 SDK 设计能力）
+- ✅ P1 Java SDK（证明 SDK 设计能力；尚未发布，演示前先 `mvn -f sdk/java/pom.xml install`）
 - ✅ P1 监控面板（证明运维意识）
 
 ### 面试时如何展示
