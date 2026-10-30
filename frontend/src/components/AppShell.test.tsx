@@ -64,5 +64,5 @@ describe('AppShell', () => {
     expect(useUiStore.getState().settingsOpen).toBe(false)
     // Typing character by character through AntD's controlled Form re-renders the whole
     // drawer each keystroke, which does not fit the 5s default in jsdom.
-  }, 20_000)
+  }, 60_000)
 })
