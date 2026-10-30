@@ -120,6 +120,10 @@ describe('DeliveriesPage', () => {
     expect(screen.getByText('尝试历史（1）')).toBeInTheDocument()
     expect(screen.getByText('321 ms')).toBeInTheDocument()
     expect(screen.getByText('SUCCEEDED')).toBeInTheDocument()
+    // A fixed 900px drawer would make a 390px viewport scroll sideways.
+    expect(document.querySelector<HTMLElement>('.ant-drawer-content-wrapper')?.style.width).toBe(
+      'min(900px, 100vw)',
+    )
   })
 
   it('only offers replay on DEAD rows, mirroring the backend state machine', () => {

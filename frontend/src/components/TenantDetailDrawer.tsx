@@ -17,6 +17,7 @@ import {
 import { useTenantStats, useUpdateTenant } from '@/api/queries'
 import { formatCount, formatMillis, formatPercent, formatTimestamp } from '@/api/time'
 import type { Tenant, TenantStatus } from '@/api/types'
+import { drawerWidth } from '@/components/drawerWidth'
 import { TenantKeysCard } from '@/components/TenantKeysCard'
 import { TenantStatusTag } from '@/components/StatusTag'
 import { useUiStore } from '@/stores/uiStore'
@@ -59,12 +60,12 @@ export function TenantDetailDrawer({
       title={tenant === undefined ? '租户' : `${tenant.name}`}
       open={tenant !== undefined}
       onClose={onClose}
-      width={520}
+      width={drawerWidth(520)}
       destroyOnHidden
     >
       {tenant === undefined ? null : (
         <div className="space-y-4">
-          <Descriptions size="small" column={2} bordered>
+          <Descriptions size="small" column={{ xs: 1, sm: 2 }} bordered>
             <Descriptions.Item label="ID">{tenant.tenantId}</Descriptions.Item>
             <Descriptions.Item label="状态">
               <TenantStatusTag status={tenant.status} />

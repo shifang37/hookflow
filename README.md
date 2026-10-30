@@ -127,6 +127,8 @@ cd frontend && npm install && npm run dev   # 终端 2 → http://localhost:5173
 
 生产构建 `npm run build:backend` 会把产物复制到 `src/main/resources/static/ui/`，后端从 `/ui/`
 提供服务（客户端路由由 `UiForwardController` 兜到 `index.html`，刷新不会 404）。
+响应式布局已按 **390×844 视口**验收（五个页面无整页横向滚动、Drawer 不超宽）；这是 Web 控制台，
+没有原生 App，真机浏览器未测。记录见 [docs/mobile-acceptance.md](docs/mobile-acceptance.md)。
 构建产物不入库，也不接进 `mvn package` —— 理由和取舍写在 [frontend/README.md](frontend/README.md)。
 
 ---

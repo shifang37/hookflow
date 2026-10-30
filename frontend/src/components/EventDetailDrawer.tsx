@@ -4,6 +4,7 @@ import type { TableProps } from 'antd'
 import { useEventDetail } from '@/api/queries'
 import { formatTimestamp } from '@/api/time'
 import type { Delivery } from '@/api/types'
+import { drawerWidth } from '@/components/drawerWidth'
 import { DeliveryStatusTag } from '@/components/StatusTag'
 
 const COLUMNS: TableProps<Delivery>['columns'] = [
@@ -80,7 +81,7 @@ export function EventDetailDrawer({
       title={data === undefined ? '事件' : `事件 #${data.eventId}`}
       open={eventId !== undefined}
       onClose={onClose}
-      width={760}
+      width={drawerWidth(760)}
       destroyOnHidden
     >
       {error !== null && (
@@ -91,7 +92,7 @@ export function EventDetailDrawer({
         <Spin />
       ) : (
         <div className="space-y-4">
-          <Descriptions size="small" column={2} bordered>
+          <Descriptions size="small" column={{ xs: 1, sm: 2 }} bordered>
             <Descriptions.Item label="Event ID">{data.eventId}</Descriptions.Item>
             <Descriptions.Item label="事件类型">
               <Typography.Text code>{data.eventType}</Typography.Text>
@@ -121,6 +122,7 @@ export function EventDetailDrawer({
               pagination={false}
               columns={COLUMNS}
               dataSource={data.deliveries}
+              scroll={{ x: 640 }}
               locale={{ emptyText: '没有匹配的 Endpoint，因此没有产生投递。' }}
             />
           </div>

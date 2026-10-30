@@ -56,9 +56,13 @@ describe('EndpointsPage', () => {
     // HMAC-SHA256(secret, "v1:" + eventId + ":" + ...) and header v1=<hex>.
     const codeTexts = Array.from(container.querySelectorAll('code')).map((code) => code.textContent)
     expect(codeTexts.some((text) => text?.includes(
-      '"v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody'))).toBe(true)
+      'HMAC-SHA256(secret, "v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody'
+    ))).toBe(true)
     expect(codeTexts).toContain('v1=<hex>')
     expect(codeTexts.some((text) => text?.includes('timestamp + "."'))).toBe(false)
+    // The receiver also has to know the timestamp is epoch seconds with a 5-minute window.
+    expect(container.textContent).toContain('epoch 秒')
+    expect(container.textContent).toContain('±300s')
   })
 
   it('shows the empty state when the tenant has no endpoints', () => {

@@ -538,7 +538,7 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 | 路线图项 | 状态 | 本计划中的任务 |
 |---|---|---|
-| P0 前端可视化 | ✅ 基本完成（缺移动端验证） | U-1（已完成） |
+| P0 前端可视化 | ✅ 完成（390×844 视口验收，真机未测） | U-1（已完成） |
 | P0 管理后台 | ✅ 基本完成（缺登录、租户硬删除、告警/设置） | U-2、U-3（已完成） |
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |

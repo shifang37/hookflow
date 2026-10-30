@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { App, Button, Drawer, Form, Input, Space, Typography } from 'antd'
 import { useQueryClient } from '@tanstack/react-query'
+import { drawerWidth } from '@/components/drawerWidth'
 import { useUiStore } from '@/stores/uiStore'
 
 interface FormValues {
@@ -38,7 +39,7 @@ export function TokenDrawer() {
       title="凭证"
       open={open}
       onClose={close}
-      width={420}
+      width={drawerWidth(420)}
       extra={
         <Button
           danger

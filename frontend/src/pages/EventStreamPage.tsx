@@ -86,7 +86,12 @@ export function EventStreamPage() {
       title: '事件类型',
       dataIndex: 'eventType',
       key: 'eventType',
-      render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+      width: 200,
+      render: (value: string) => (
+        <Typography.Text code className="!whitespace-nowrap">
+          {value}
+        </Typography.Text>
+      ),
     },
     {
       title: '投递状态',
@@ -175,6 +180,9 @@ export function EventStreamPage() {
           // Only the first load blanks the table; a poll keeps the old rows visible
           // (placeholderData) so the page does not flicker every two seconds.
           loading={isFetching && data === undefined}
+          // Four columns do not fit 390px; scroll the table body instead of wrapping the
+          // event type one character per line.
+          scroll={{ x: 760 }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys.map(Number)),

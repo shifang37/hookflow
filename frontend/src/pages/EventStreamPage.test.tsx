@@ -163,6 +163,9 @@ describe('EventStreamPage', () => {
     expect(screen.getByText(/"amount": 42/)).toBeInTheDocument()
     expect(screen.getByText('死信')).toBeInTheDocument()
     expect(screen.getByText(/SERVER_5XX · 500/)).toBeInTheDocument()
+    expect(document.querySelector<HTMLElement>('.ant-drawer-content-wrapper')?.style.width).toBe(
+      'min(760px, 100vw)',
+    )
   })
 
   it('resolves a multi-event selection into the DEAD delivery ids it replays', async () => {

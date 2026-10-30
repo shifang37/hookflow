@@ -104,7 +104,7 @@ export function EndpointTestModal({
                   : '按投递分类这是不可重试结果。'
               }
             />
-            <Descriptions size="small" column={3} bordered>
+            <Descriptions size="small" column={{ xs: 1, sm: 3 }} bordered>
               <Descriptions.Item label="HTTP">
                 {result.statusCode ?? '—'}
               </Descriptions.Item>

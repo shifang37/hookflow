@@ -3,6 +3,7 @@ import type { TableProps } from 'antd'
 import { useDeliveryDetail } from '@/api/queries'
 import { formatMillis, formatTimestamp } from '@/api/time'
 import type { DeliveryAttempt } from '@/api/types'
+import { drawerWidth } from '@/components/drawerWidth'
 import { DeliveryStatusTag } from '@/components/StatusTag'
 
 const ATTEMPT_COLORS: Record<string, string> = {
@@ -87,7 +88,7 @@ export function DeliveryDetailDrawer({
       title={data === undefined ? '投递' : `投递 #${data.delivery.id}`}
       open={deliveryId !== undefined}
       onClose={onClose}
-      width={900}
+      width={drawerWidth(900)}
       destroyOnHidden
     >
       {error !== null && (
@@ -98,7 +99,7 @@ export function DeliveryDetailDrawer({
         <Spin />
       ) : (
         <div className="space-y-4">
-          <Descriptions size="small" column={2} bordered>
+          <Descriptions size="small" column={{ xs: 1, sm: 2 }} bordered>
             <Descriptions.Item label="投递 ID">{data.delivery.id}</Descriptions.Item>
             <Descriptions.Item label="事件 ID">{data.delivery.eventId}</Descriptions.Item>
             <Descriptions.Item label="Endpoint ID">{data.delivery.endpointId}</Descriptions.Item>
@@ -143,6 +144,7 @@ export function DeliveryDetailDrawer({
                 pagination={false}
                 columns={ATTEMPT_COLUMNS}
                 dataSource={data.attempts}
+                scroll={{ x: 760 }}
                 expandable={{
                   expandedRowRender: (attempt) =>
                     attempt.responsePreview === null ? (

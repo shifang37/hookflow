@@ -6,9 +6,9 @@
 当前项目已具备**生产级后端架构**（后端 233 个测试、15 条 ADR、完整的故障恢复机制），
 并在前端控制台、Java SDK、K8s 和监控上完成了大部分产品化工作。
 
-> **状态同步（2026-10-30）**：以下勾选已按当前 `master`（`78dd725`）复核；
-> 完成度速览见下一节。当前基线：后端 174 单测 + 71 集成、前端 81、Java SDK 66，
-> 共 392 个测试；15 条 ADR。
+> **状态同步（2026-10-30）**：以下勾选已按 2026-10-30 的 `master` 复核；
+> 完成度速览见下一节。当前基线：后端 174 单测 + 71 集成、前端 83、Java SDK 66，
+> 共 394 个测试；15 条 ADR。
 
 **核心原则**：
 - ✅ 优先提升**可视化**和**易用性**（面试时更容易展示）
@@ -37,7 +37,7 @@
 
 | 优化项 | 状态 | 验收 | 说明 |
 |---|---|---|---|
-| P0 前端可视化 | 🟡 基本完成 | 5/6 | 5 个页面、2s 轮询、图表、覆盖率达标；移动端未实测 |
+| P0 前端可视化 | ✅ 完成 | 6/6 | 5 个页面、2s 轮询、图表、覆盖率达标；390×844 视口已验收（非真机） |
 | P0 管理后台 | 🟡 基本完成 | 3/5 | 主要 CRUD、租户停用、Endpoint 测试可在 UI 完成；无登录、租户硬删除、告警/设置 |
 | P1 Java SDK | 🟢 已实现，未发布 | 5/6 | 66 测试、行覆盖 92.9%；未发布到 GitHub Packages / Maven Central |
 | P1 K8s 部署 | ✅ 已完成 | 5/5 | Helm chart、HPA、探针、优雅停机，kind 实测 |
@@ -55,8 +55,10 @@
 > **状态（2026-10-30）**：基本完成。运营控制台在 [`frontend/`](../frontend/)，
 > React 18 + TypeScript + Vite + Ant Design + React Query + Zustand + Recharts；
 > 生产构建由后端从 `/ui/` 提供。5 个页面（事件流 / 投递 / Endpoints / 租户 / 系统监控）
-> 都接真实接口，事件流 2s 轮询，前端 81 个测试、语句覆盖约 69%。
-> 缺口：移动端未实测。单条投递详情抽屉已接（attempt 历史走 `GET /v1/deliveries/{id}`）。
+> 都接真实接口，事件流 2s 轮询，前端 83 个测试、语句覆盖约 69%。
+> 移动端按 390×844 视口验收（无整页横向滚动、侧栏折叠、Drawer 不超宽），见
+> [mobile-acceptance.md](mobile-acceptance.md)；真机浏览器未测，原生 App 不在范围内。
+> 单条投递详情抽屉已接（attempt 历史走 `GET /v1/deliveries/{id}`）。
 
 ### 立项时的现状问题（已解决）
 
@@ -323,7 +325,7 @@ cd frontend && npm run build
 - [x] 至少包含 4 个页面：事件流、投递详情、租户管理、系统监控（另有 Endpoints 页；投递详情抽屉可看 attempt 历史）
 - [x] 实时刷新（事件流 2s、投递 3s 轮询；满足 ≤3s）
 - [x] 至少 1 个交互式图表（吞吐折线 + 延迟分布，Recharts）
-- [ ] 响应式设计，支持移动端查看 —— 布局已做断点（侧栏折叠、卡片栅格、表格横向滚动），但没有移动端实测
+- [x] 响应式设计，支持移动端查看 —— 390×844 视口实测：五个页面无整页横向滚动、侧栏折叠、Drawer 不超宽；记录见 [mobile-acceptance.md](mobile-acceptance.md)。真机浏览器未测
 - [x] 单元测试覆盖率 ≥ 50%（Vitest + Testing Library；语句 69.16%，行 67.87%）
 
 ### 参考资料
@@ -1791,8 +1793,8 @@ hookflow_outbox_backlog
 
 ## P2：CI/CD 完善
 
-> **状态（2026-10-30）**：大部分完成，见下方「实现位置」。当前 HEAD（`78dd725`）的 `ci` run #22
-> 绿；`docker` run #8 已成功构建并推送 GHCR；`helm-v0.1.0` 的 `helm-publish` run #1 已发布
+> **状态（2026-10-30）**：大部分完成，见下方「实现位置」。`ci` run #22 与任务 U 后的 run #26
+> 均绿；`docker` run 已成功构建并推送 GHCR；`helm-v0.1.0` 的 `helm-publish` run #1 已发布
 > OCI chart。**只剩 Codecov 上传没有验证**（没有 token，步骤按设计跳过），不要标成已绿。
 
 ### 现状问题（v0.4 之前）
@@ -1815,7 +1817,7 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      当前 HEAD 的 run #22 绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
+      run #22 与任务 U 后的 run #26 均绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
       曾由 Vitest 3 的 `onTaskUpdate` unhandled error 引起（77 个测试其实全过），已升级 Vitest 4.1.12
 - [ ] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`），

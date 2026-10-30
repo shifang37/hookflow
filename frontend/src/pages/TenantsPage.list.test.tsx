@@ -46,6 +46,9 @@ describe('TenantsPage', () => {
     expect(screen.getByText('98.77%')).toBeInTheDocument()
     expect(screen.getByText('812 ms')).toBeInTheDocument()
     expect(screen.getByText(/SERVER_5XX · 500/)).toBeInTheDocument()
+    expect(document.querySelector<HTMLElement>('.ant-drawer-content-wrapper')?.style.width).toBe(
+      'min(520px, 100vw)',
+    )
   })
 
   it('suspends an active tenant from the drawer', async () => {

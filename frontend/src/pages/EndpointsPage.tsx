@@ -323,10 +323,16 @@ function SubscriptionTags({ value }: { value: string }) {
 
 function EndpointHints({ endpoint }: { endpoint: Endpoint }) {
   return (
-    <div className="text-xs text-gray-600">
+    <div
+      className="text-xs text-gray-600"
+      // The table body is intentionally wider than a phone (the action column scrolls
+      // into view); keep the hint itself inside the viewport so the signing formula is
+      // readable without scrolling sideways.
+      style={{ maxWidth: 'min(640px, calc(100vw - 2rem))' }}
+    >
       <div>
         接收方用建 Endpoint 时拿到的那串 secret 验证签名：
-        <Typography.Text code className="!text-xs">
+        <Typography.Text code className="!text-xs !whitespace-normal break-all">
           HMAC-SHA256(secret, "v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody)
         </Typography.Text>
         ，结果写成 <Typography.Text code className="!text-xs">v1=&lt;hex&gt;</Typography.Text> 与{' '}
