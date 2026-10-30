@@ -9,6 +9,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Locale;
+
 @Service
 public class TenantService {
 
@@ -55,14 +57,36 @@ public class TenantService {
      */
     @Transactional
     public Tenant updateConfig(long tenantId, Integer rateLimit, Integer maxInFlight, Integer weight) {
-        if (rateLimit == null && maxInFlight == null && weight == null) {
-            throw ApiException.invalid("at least one of rateLimit, maxInFlight, weight is required");
+        return updateConfig(tenantId, rateLimit, maxInFlight, weight, null);
+    }
+
+    /**
+     * Same partial update, plus the tenant lifecycle status.
+     *
+     * <p>Suspending is deliberately not a delete: keys, endpoints and delivery history stay
+     * intact, and {@link #requireActive} starts refusing new ingest for the tenant. Deliveries
+     * already accepted are left to finish; an operator who wants them stopped should pause
+     * the endpoint(s) first.
+     *
+     * @param status {@code ACTIVE} or {@code SUSPENDED}; {@code null} keeps the current value
+     * @throws ApiException {@code INVALID_REQUEST} when nothing is provided, a value is out
+     *                      of range, or the status is not one of the two lifecycle states
+     */
+    @Transactional
+    public Tenant updateConfig(long tenantId, Integer rateLimit, Integer maxInFlight, Integer weight,
+                               String status) {
+        if (rateLimit == null && maxInFlight == null && weight == null && status == null) {
+            throw ApiException.invalid(
+                    "at least one of rateLimit, maxInFlight, weight, status is required");
         }
         Tenant current = require(tenantId);
 
         int newRateLimit = rateLimit == null ? current.rateLimit() : rateLimit;
         int newMaxInFlight = maxInFlight == null ? current.maxInFlight() : maxInFlight;
         int newWeight = weight == null ? current.weight() : weight;
+        String newStatus = status == null
+                ? current.status()
+                : status.trim().toUpperCase(Locale.ROOT);
 
         if (newRateLimit < 0) {
             throw ApiException.invalid("rateLimit must be >= 0 (0 = unlimited)");
@@ -73,8 +97,11 @@ public class TenantService {
         if (newWeight < 1 || newWeight > 100) {
             throw ApiException.invalid("weight must be between 1 and 100");
         }
+        if (!Tenant.ACTIVE.equals(newStatus) && !Tenant.SUSPENDED.equals(newStatus)) {
+            throw ApiException.invalid("status must be ACTIVE or SUSPENDED");
+        }
 
-        tenantMapper.updateConfig(tenantId, newRateLimit, newMaxInFlight, newWeight);
+        tenantMapper.updateConfig(tenantId, newRateLimit, newMaxInFlight, newWeight, newStatus);
         admissionControl.ifAvailable(AdmissionControl::refresh);
         return require(tenantId);
     }

@@ -1,7 +1,22 @@
-import { Alert, App, Button, Card, Descriptions, Drawer, Empty, Form, InputNumber, List, Statistic, Typography } from 'antd'
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Drawer,
+  Empty,
+  Form,
+  InputNumber,
+  List,
+  Popconfirm,
+  Space,
+  Statistic,
+  Typography,
+} from 'antd'
 import { useTenantStats, useUpdateTenant } from '@/api/queries'
 import { formatCount, formatMillis, formatPercent, formatTimestamp } from '@/api/time'
-import type { Tenant } from '@/api/types'
+import type { Tenant, TenantStatus } from '@/api/types'
 import { TenantKeysCard } from '@/components/TenantKeysCard'
 import { TenantStatusTag } from '@/components/StatusTag'
 import { useUiStore } from '@/stores/uiStore'
@@ -26,6 +41,19 @@ export function TenantDetailDrawer({
   const { data: stats, error } = useTenantStats(tenant?.tenantId, range)
   const update = useUpdateTenant()
 
+  const changeStatus = (target: Tenant, status: TenantStatus) => {
+    update.mutate(
+      { tenantId: target.tenantId, body: { status } },
+      {
+        onSuccess: (updated) => {
+          message.success(status === 'SUSPENDED' ? '租户已停用' : '租户已启用')
+          onUpdated(updated)
+        },
+        onError: (cause) => message.error(cause.message),
+      },
+    )
+  }
+
   return (
     <Drawer
       title={tenant === undefined ? '租户' : `${tenant.name}`}
@@ -46,6 +74,38 @@ export function TenantDetailDrawer({
             <Descriptions.Item label="权重">{tenant.weight}</Descriptions.Item>
             <Descriptions.Item label="创建时间">{formatTimestamp(tenant.createdAt)}</Descriptions.Item>
           </Descriptions>
+
+          <Card size="small" title="生命周期">
+            <Space align="start">
+              {tenant.status === 'ACTIVE' ? (
+                <Popconfirm
+                  title="停用这个租户？"
+                  description="停用后该租户不能再写入新事件；已接收的投递会继续处理，数据不会删除。"
+                  okText="确认停用"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => changeStatus(tenant, 'SUSPENDED')}
+                >
+                  <Button danger loading={update.isPending}>
+                    停用租户
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  type="primary"
+                  loading={update.isPending}
+                  onClick={() => changeStatus(tenant, 'ACTIVE')}
+                >
+                  启用租户
+                </Button>
+              )}
+              <Typography.Text type="secondary" className="text-xs">
+                {tenant.status === 'ACTIVE'
+                  ? '停用是可逆的：Key、Endpoint 和投递历史都会保留。'
+                  : '该租户当前不能写入新事件；启用后恢复。'}
+              </Typography.Text>
+            </Space>
+          </Card>
 
           {error !== null && (
             <Alert type="error" showIcon message="读取统计失败" description={error.message} />

@@ -49,11 +49,13 @@ public interface TenantMapper {
             UPDATE tenant
                SET rate_limit = #{rateLimit},
                    max_in_flight = #{maxInFlight},
-                   weight = #{weight}
+                   weight = #{weight},
+                   status = #{status}
              WHERE id = #{id}
             """)
     int updateConfig(@Param("id") long id,
                      @Param("rateLimit") int rateLimit,
                      @Param("maxInFlight") int maxInFlight,
-                     @Param("weight") int weight);
+                     @Param("weight") int weight,
+                     @Param("status") String status);
 }

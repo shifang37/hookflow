@@ -295,4 +295,5 @@ export interface UpdateTenantRequest {
   rateLimit?: number
   maxInFlight?: number
   weight?: number
+  status?: TenantStatus
 }

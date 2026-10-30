@@ -248,7 +248,12 @@ public final class Dtos {
      * Partial update of a tenant's policy. Omitted fields keep their current value;
      * sending none of them is a 400 rather than a silent no-op.
      */
-    public record UpdateTenantRequest(Integer rateLimit, Integer maxInFlight, Integer weight) {
+    /**
+     * Partial tenant policy update. {@code status} is {@code ACTIVE} or {@code SUSPENDED};
+     * omission keeps the current value, so an operator can change one knob at a time.
+     */
+    public record UpdateTenantRequest(Integer rateLimit, Integer maxInFlight, Integer weight,
+                                      String status) {
     }
 
     /**

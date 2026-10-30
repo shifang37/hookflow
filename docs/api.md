@@ -166,11 +166,12 @@ curl -X POST localhost:8080/v1/admin/tenants \
 ```bash
 curl -X PATCH localhost:8080/v1/admin/tenants/1 \
   -H 'X-Bootstrap-Token: ...' -H 'Content-Type: application/json' \
-  -d '{"rateLimit":200,"weight":5}'
+  -d '{"rateLimit":200,"weight":5,"status":"SUSPENDED"}'
 ```
 
-- 省略的字段保持原值；**三个字段都不给是 `400`**，不是静默 no-op
-- 约束：`rateLimit >= 0`（0 = 不限速）、`maxInFlight >= 0`（0 = 不限并发）、`weight ∈ [1,100]`
+- 省略的字段保持原值；**四个字段都不给是 `400`**，不是静默 no-op
+- 约束：`rateLimit >= 0`（0 = 不限速）、`maxInFlight >= 0`（0 = 不限并发）、`weight ∈ [1,100]`、`status ∈ {ACTIVE, SUSPENDED}`
+- `status` 是租户生命周期，不是删除：Key、Endpoint 和投递历史都保留。停用后 `requireActive` 会拒绝该租户的新事件（`403`）；已接收的投递继续处理，操作员若要立刻停止出站流量应先暂停 Endpoint
 - 修改后**立即刷新调度器快照**，下一次发布就按新权重生效，不必等 refresh interval
 - `200` → 更新后的租户（含 counts），控制台可直接替换那一行
 

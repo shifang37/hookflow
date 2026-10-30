@@ -114,7 +114,7 @@ public class AdminConsoleController {
             throw ApiException.invalid("request body is required");
         }
         Tenant updated = tenantService.updateConfig(tenantId, request.rateLimit(),
-                request.maxInFlight(), request.weight());
+                request.maxInFlight(), request.weight(), request.status());
         // The counts are not part of the policy update; read them back once so the
         // console can replace its row without a second request.
         TenantResponse counts = reportService.tenant(tenantId);

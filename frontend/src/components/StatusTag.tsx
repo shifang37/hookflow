@@ -91,10 +91,10 @@ export function EndpointStatusTag({ status }: { status: EndpointStatus }) {
 }
 
 /**
- * Suspended is red rather than grey, and the API cannot produce this state: `PATCH
- * /v1/admin/tenants/{id}` only takes rate limit, budget and weight, so a tenant showing
- * `SUSPENDED` was changed out of band. It is not cosmetic either — `TenantService
- * .requireActive` rejects that tenant's event submissions with a 403.
+ * Suspended is red rather than grey: it is an operator action with an enforcement
+ * consequence, not just an inactive row. `PATCH /v1/admin/tenants/{id}` sets it, and
+ * `TenantService.requireActive` rejects that tenant's event submissions with a 403
+ * until it is reactivated.
  */
 export function TenantStatusTag({ status }: { status: TenantStatus }) {
   return status === 'ACTIVE' ? <Tag color="success">启用</Tag> : <Tag color="error">停用</Tag>

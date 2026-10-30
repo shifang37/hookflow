@@ -1,8 +1,10 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '@/test/render'
 import { acme, acmeStats, resetTenantPageMocks, withStats, withTenants } from '@/test/tenantFixtures'
+import { useUpdateTenant } from '@/api/queries'
 import { useUiStore } from '@/stores/uiStore'
+import type { Tenant } from '@/api/types'
 import { TenantsPage } from './TenantsPage'
 
 vi.mock('@/api/queries', async (importOriginal) => {
@@ -44,6 +46,34 @@ describe('TenantsPage', () => {
     expect(screen.getByText('98.77%')).toBeInTheDocument()
     expect(screen.getByText('812 ms')).toBeInTheDocument()
     expect(screen.getByText(/SERVER_5XX · 500/)).toBeInTheDocument()
+  })
+
+  it('suspends an active tenant from the drawer', async () => {
+    const mutate = vi.fn(
+      (
+        _args: { tenantId: number; body: { status: string } },
+        options?: { onSuccess?: (tenant: Tenant) => void },
+      ) => {
+        options?.onSuccess?.({ ...acme, status: 'SUSPENDED' })
+      },
+    )
+    vi.mocked(useUpdateTenant).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useUpdateTenant>)
+    withTenants([acme])
+    withStats(acmeStats)
+
+    renderWithProviders(<TenantsPage />)
+    fireEvent.click(screen.getByText('acme'))
+    fireEvent.click(screen.getByRole('button', { name: '停用租户' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确认停用' }))
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
+    expect(mutate.mock.calls[0]?.[0]).toEqual({
+      tenantId: 1,
+      body: { status: 'SUSPENDED' },
+    })
   })
 
   it('says "no dead letters" instead of rendering an empty list', () => {
