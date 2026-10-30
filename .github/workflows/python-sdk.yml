@@ -10,8 +10,13 @@ name: python-sdk
 # on `sdk/python` not existing (run 41022043877). Once task P adds sdk/python/**,
 # every change there triggers the job; a workflow-only edit before that point has
 # nothing to test anyway.
+#
+# `branches: ['**']` is required, not cosmetic: GitHub does not evaluate path
+# filters for tag pushes, so a paths-only workflow runs on every tag. Pushing
+# helm-v0.1.0 did exactly that and produced a spurious failure (run 41037758718).
 on:
   push:
+    branches: ['**']
     paths:
       - 'sdk/python/**'
   pull_request:

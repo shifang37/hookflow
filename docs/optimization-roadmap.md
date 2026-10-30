@@ -1757,9 +1757,9 @@ hookflow_outbox_backlog
 
 ## P2：CI/CD 完善
 
-> **状态（2026-10-30）**：已实现，见下方「实现位置」。`docker` run #1 已在真实 Actions 上
-> 构建并推送 GHCR；`ci` run #20 绿（build 一次 flake 后重跑通过）。**Helm OCI 发布和 Codecov
-> 上传还没有验证**，不要标成已绿。
+> **状态（2026-10-30）**：已实现，见下方「实现位置」。`docker` run #1 已推送 GHCR；`ci` run #20
+> 绿（build 一次 flake 后重跑通过）；`helm-v0.1.0` 已发布 OCI chart。**只剩 Codecov 上传没有
+> 验证**（没有 token），不要标成已绿。
 
 ### 现状问题（v0.4 之前）
 
@@ -1788,7 +1788,7 @@ hookflow_outbox_backlog
 - [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
       再 buildx 推 `ghcr.io/shifang37/hookflow`）。**run #1 已成功构建并推送 GHCR**
 - [x] 打 tag 自动发布 Helm Chart —— `helm-publish.yml`（tag `helm-v*`，`helm package --version <tag>` 后推
-      `oci://ghcr.io/shifang37/charts`）。**没有实际 push 过**
+      `oci://ghcr.io/shifang37/charts`）。**`helm-v0.1.0` run #1 已成功推送，chart 可匿名拉取**
 - [x] README 显示 CI 状态徽章 —— 换成 GitHub Actions 实时徽章（CI / Docker / Helm / Java SDK）
 
 ### 实现位置
@@ -1806,7 +1806,7 @@ hookflow_outbox_backlog
 `helm package`/`helm lint`、前端 77 个测试与 `npm run build:backend`。
 `docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
 但 **GitHub Actions 的 `docker` run #1 已经成功构建并推送 GHCR**。
-Helm OCI 发布与 Codecov 上传仍未验证，只能在 Actions 页面看，本地无法伪造。
+Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；只剩 Codecov 上传未验证，本地无法伪造。
 
 ---
 

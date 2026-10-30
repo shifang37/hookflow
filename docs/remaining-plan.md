@@ -11,7 +11,8 @@
 > **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
 > GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
 > **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（build 一次
-> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过）。
+> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过）；`helm-v0.1.0` 的
+> `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`。
 > **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
 > 下一步是 **U（控制台小缺口）**。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
@@ -437,18 +438,20 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
       （`packages: write`，tag 用 sha + latest）。**Actions run #1 验证成功**：前端构建、buildx、
       GHCR 推送全部通过；本地 `docker build` 仍卡在容器内 Maven `dependency:go-offline`（网络）。
 - [x] Helm 发布：`helm package` + 推 OCI（`oci://ghcr.io/shifang37/charts`）或 chart-releaser；
-      依赖 K 完成。`helm-publish.yml` 已就绪；本地只验证了 `helm package`/`helm lint`，**没有真正 push**。
+      依赖 K 完成。**已验证**：`helm-v0.1.0` tag 触发的 run #1 成功，chart 可匿名拉取
+      （digest `sha256:043e…`）；首次 tag 还误触发了 `python-sdk`（GitHub 不评估 tag 的 paths），
+      已用 `branches: ['**']` 修复。
 - [x] README 换**实时** CI 徽章（现在是静态 shields）：CI / Docker / Helm / Java SDK 四个实时徽章；
       Codecov 徽章等到能上传成功再加（否则长期 unknown）。
 - [x] SDK（J）与 Python SDK（P）的 job 都在 CI 里：Java 用已有的 `sdk.yml`；`python-sdk.yml` 已预置，
       路径过滤使它**在 P 落地前不会运行**，不能算「Python SDK 已过 CI」。首次推送时它曾因 workflow
       文件自身在触发路径里而失败一次（run #1，没有 `sdk/python`），已把自身从触发路径移除。
 
-**完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「master 自动构建镜像」「README 徽章」
-已生效（docker run #1 推送 GHCR 成功；ci run #20 绿，build 一次 flake 后重跑）。前端 run #17/#18
-的 exit 1 已修复：Vitest 3 的 `onTaskUpdate` unhandled error（77 个测试全过）→ 升级 Vitest 4.1.12，
-并把 AppShell 的 20s 显式超时统一到 60s。「Codecov 上传」「tag 发布 Helm」的 workflow 已写好，
-但**没有 token / 没有在 Actions 上验证**，不能声称已绿。Python job 只是预置。
+**完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「master 自动构建镜像」「tag 发布 Helm」
+「README 徽章」已生效（docker run #1 推送 GHCR；ci run #20 绿；helm-v0.1.0 发布 chart 成功）。
+前端 run #17/#18 的 exit 1 已修复：Vitest 3 的 `onTaskUpdate` unhandled error（77 个测试全过）→
+升级 Vitest 4.1.12，并把 AppShell 的 20s 显式超时统一到 60s。只剩「Codecov 上传」的 workflow
+已写好但**没有 token**，不能声称已绿。Python job 只是预置。
 验收对照见 [optimization-roadmap.md](optimization-roadmap.md) P2 的「实现位置」。
 
 验收 = 路线图 optimization-roadmap.md P2「验收标准」的 5 条，逐条能指到一个 workflow 步骤。
@@ -538,7 +541,7 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |
 | P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |
-| P2 CI/CD | ✅ 基本完成：JaCoCo 单测覆盖率 + Codecov 步骤、`docker.yml`、`helm-publish.yml`、实时徽章、`python-sdk.yml` 预置；**GHCR/Helm push/Codecov 上传未验证** | C（已完成） |
+| P2 CI/CD | ✅ 基本完成：JaCoCo 单测覆盖率 + Codecov 步骤、`docker.yml`、`helm-publish.yml`、实时徽章、`python-sdk.yml` 预置；**GHCR 与 Helm OCI 已验证，Codecov 上传未验证** | C（已完成） |
 | P2 Python SDK | ❌ | P |
 | P3 性能（2000/s） | ◐（5 轮优化 + 报告，目标未达） | H |
 
