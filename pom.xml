@@ -26,6 +26,13 @@
       reproducible on any developer machine.
     -->
     <argLine>-Duser.timezone=UTC</argLine>
+    <!--
+      JaCoCo's prepare-agent writes its JVM options here instead of overwriting
+      `argLine`, which would drop -Duser.timezone=UTC and turn the time
+      assertions red. Empty by default: `mvn test` is byte-for-byte the same run
+      with or without the coverage profile.
+    -->
+    <jacoco.argLine></jacoco.argLine>
     <mybatis-spring-boot.version>4.1.0</mybatis-spring-boot.version>
     <springdoc.version>3.1.1</springdoc.version>
     <jqwik.version>1.10.2</jqwik.version>
@@ -154,6 +161,20 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
+      <!--
+        `@{...}` (late replacement) is required, not `${...}`: `${...}` is resolved
+        before prepare-agent attaches the agent in the same build and would pass an
+        empty string, so surefire forks without -javaagent and JaCoCo then skips
+        the report ("missing execution data file"). The empty default keeps plain
+        `mvn test` free of an agent.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <argLine>-Duser.timezone=UTC @{jacoco.argLine}</argLine>
+        </configuration>
+      </plugin>
       <!-- `mvn test` = fast unit tests. `mvn verify` = unit + container-backed ITs. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -174,5 +195,41 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!--
+      `mvn -Pcoverage test` = unit tests + JaCoCo report in target/site/jacoco.
+      Deliberately a profile and not part of the default lifecycle: the agent
+      would also instrument the Testcontainers ITs during `verify`, inflating CI
+      time and mixing integration paths into the coverage number that Codecov
+      receives. IT is still the quality gate; this is only the number.
+    -->
+    <profile>
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.12</version>
+            <configuration>
+              <propertyName>jacoco.argLine</propertyName>
+            </configuration>
+            <executions>
+              <execution>
+                <id>prepare-agent</id>
+                <goals><goal>prepare-agent</goal></goals>
+              </execution>
+              <execution>
+                <id>report</id>
+                <phase>test</phase>
+                <goals><goal>report</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
 

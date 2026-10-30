@@ -1,0 +1,44 @@
+name: helm-publish
+
+# Publishing is a deliberate act, separate from helm.yml (which only lints and
+# renders on chart changes):
+#   git tag helm-v0.1.0 && git push origin helm-v0.1.0
+# The tag prefix distinguishes chart releases from image releases (`v*`) and SDK
+# releases (`sdk-v*`); never let two of them share a tag.
+on:
+  push:
+    tags: ['helm-v*']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Chart.yaml says 0.1.0 today, so the tag is the source of truth for the
+      # published version: helm-v0.2.0 must not ship a chart that claims 0.1.0.
+      # In an OCI reference the last path segment is the repository (`charts`);
+      # the package name is `hookflow`.
+      - name: Package and push
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#helm-v}"
+          mkdir -p dist
+          helm package helm/hookflow --version "$version" --destination dist
+          helm push "dist/hookflow-${version}.tgz" oci://ghcr.io/shifang37/charts

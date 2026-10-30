@@ -29,6 +29,48 @@ jobs:
       - name: Unit tests
         run: ./mvnw -B test
 
+      # Coverage comes from unit tests only: the `coverage` profile binds the JaCoCo
+      # agent to surefire and never to the Testcontainers ITs below, so the number
+      # Codecov sees is not diluted (or slowed down) by integration tests.
+      - name: Unit tests with JaCoCo
+        run: ./mvnw -B -Pcoverage test
+
+      # `secrets` is not a valid context in a step-level `if:` (GitHub rejects it),
+      # so the token is read by a shell step and exposed as an output. A fork PR
+      # never receives secrets and this repository has no CODECOV_TOKEN configured
+      # yet, so the default path is: generate the report, skip the upload, say why.
+      - name: Check Codecov configuration
+        id: codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          if [ -z "$CODECOV_TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "CODECOV_TOKEN is not configured; coverage was generated but not uploaded."
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Pull request: secrets are not available to forks, so coverage was not uploaded."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload coverage to Codecov
+        if: ${{ steps.codecov.outputs.enabled == 'true' }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: target/site/jacoco/jacoco.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # A missing or expired token must not turn a green test run red; the
+          # previous step's log is the signal that the upload was skipped.
+          fail_ci_if_error: false
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: ignore
+
       # `verify` runs the failsafe ITs, which start MySQL and RabbitMQ through
       # Testcontainers and assert the behaviours this project claims to guarantee.
       - name: Unit + integration tests

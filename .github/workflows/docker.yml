@@ -1,0 +1,76 @@
+name: docker
+
+# The image is published from two places and nowhere else:
+#   - every push to master (the default branch) -> :latest + :sha-<short>;
+#   - a release tag `v*` (for example v0.4.0) -> :v0.4.0 + :sha-<short>.
+# `sdk-v*` and `helm-v*` do not match `v*`, so the three release trains cannot
+# publish each other's artifacts by accident. Do not widen this to `*`.
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+
+# GHCR accepts the workflow's GITHUB_TOKEN, but only if the job asks for
+# packages: write (the repository default may be read-only). contents: read is
+# all checkout needs.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # This step is not optional. The Dockerfile copies src/ and never runs npm,
+      # so without `npm run build:backend` the image still serves the API but
+      # /ui/ 404s. The script writes frontend/dist into
+      # src/main/resources/static/ui/ (gitignored), which COPY src/ then picks up.
+      - name: Build console into the jar resources
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:backend
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # {{is_default_branch}} is evaluated per ref, so only master gets :latest;
+      # a tag gets :ref,event=tag as its human-readable name.
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

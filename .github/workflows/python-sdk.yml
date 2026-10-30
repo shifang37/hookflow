@@ -1,0 +1,50 @@
+name: python-sdk
+
+# Placeholder for the Python SDK (roadmap P2, task P). `sdk/python/` does not
+# exist yet, so the path filter keeps this job dormant: it becomes active by
+# itself when task P lands, without editing this file. Until then it must not be
+# described as "Python SDK passes CI".
+on:
+  push:
+    paths:
+      - 'sdk/python/**'
+      - '.github/workflows/python-sdk.yml'
+  pull_request:
+    paths:
+      - 'sdk/python/**'
+      - '.github/workflows/python-sdk.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      - name: Typecheck
+        run: mypy .
+
+      - name: Unit tests with coverage
+        run: pytest --cov=hookflow --cov-report=xml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-sdk-coverage
+          path: sdk/python/coverage.xml
+          if-no-files-found: ignore

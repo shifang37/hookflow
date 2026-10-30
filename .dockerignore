@@ -1,0 +1,18 @@
+# Keep the build context small on CI: the image compiles from source inside the
+# Dockerfile, and the console is built by the workflow (npm run build:backend)
+# into src/main/resources/static/ui/ before docker build runs. None of the paths
+# below are read by the Dockerfile.
+.git
+.github
+target
+frontend/node_modules
+frontend/dist
+frontend/coverage
+frontend/.tmp
+docs
+sdk
+helm
+deploy
+monitoring
+scripts
+.tmp-helm-package

@@ -2,7 +2,10 @@
 
 **多租户 Webhook / 事件投递平台：接收事件，签名后异步投递到客户回调地址，失败自动退避重试，全程可追踪、可重放。**
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2ea44f)](.github/workflows/ci.yml)
+[![CI](https://github.com/shifang37/hookflow/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/ci.yml)
+[![Docker](https://github.com/shifang37/hookflow/actions/workflows/docker.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/docker.yml)
+[![Helm](https://github.com/shifang37/hookflow/actions/workflows/helm.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/helm.yml)
+[![Java SDK](https://github.com/shifang37/hookflow/actions/workflows/sdk.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/sdk.yml)
 ![Java](https://img.shields.io/badge/Java-21-ED8B00)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F)
 ![MySQL](https://img.shields.io/badge/MySQL-8.4-4479A1)
@@ -342,8 +345,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 96 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 105 单元 + 36 集成 = 141 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（本机实测 4 分 08 秒）
+./mvnw test      # 164 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
+./mvnw verify    # 164 单元 + 69 集成 = 233 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -385,6 +388,28 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | 0007 | 批量取消（暂停端点）与逐行认领相互死锁——**只有把并发量提到 1 500 行才会出现** | [docs/failures/0007](docs/failures/0007-cancel-vs-claim-deadlock.md) |
 
 这四个文档比任何功能列表都更能说明这个项目被真正跑过。
+
+---
+
+## CI/CD：每次 push 自动跑什么
+
+| workflow | 触发 | 做什么 | 状态 |
+|---|---|---|---|
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | 步骤与本机命令一致；**Codecov 上传未启用**（没有 `CODECOV_TOKEN`，步骤打印原因后跳过） |
+| [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | workflow 已就绪；本地 `npm run build:backend` 通过，但 `docker build` 卡在容器内 Maven 的 `dependency:go-offline`（本机网络，约 13 分钟无进展后放弃），**镜像没有构建完成、GHCR 没有推送** |
+| [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
+| [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | workflow 已就绪；**没有实际 push 过**（需要 GHCR 权限） |
+| [sdk.yml](.github/workflows/sdk.yml) | `sdk/java/**` 变更 | Java SDK `mvn verify`（含 LINE ≥ 80% 门槛）+ javadoc | 已存在 |
+| [sdk-publish.yml](.github/workflows/sdk-publish.yml) | tag `sdk-v*` | `mvn deploy` 到 GitHub Packages | 已存在，**尚未实际发布** |
+| [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；任务 P 落地后自动生效 |
+
+**覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
+164 个测试的 **LINE 26.1%**（728/2786，另有 BRANCH 25.4%），报告在 `target/site/jacoco/`。
+这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 69 个 IT 覆盖的路径不计入，所以不要拿它
+和 SDK 的 92.9%（SDK 自己的测试）比较。
+
+三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`，各 workflow 顶部注释写了原因。
+徽章只有在对应 workflow 至少跑过一次后才会变绿，刚推送时显示 "no status"。
 
 ## 故障演练（真实进程，真实依赖故障）
 
@@ -539,7 +564,8 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 增删改查（含软删除）、
   事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
   K8s/Helm 已就绪（[`helm/hookflow/`](helm/hookflow/README.md)），Prometheus + Grafana
-  监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；剩余的是 CI/CD 补完、Python SDK 和 P3 性能
+  监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；CI/CD 流水线已就绪（见上文，
+  **GHCR 镜像、Helm OCI 发布和 Codecov 上传都没有实际验证过**）；剩余的是 Python SDK 和 P3 性能
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）

@@ -8,7 +8,10 @@
 > **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)）。
 > **G 也已完成**（2026-10-29，见 [`docs/monitoring.md`](monitoring.md)）：3 个面板、2 条告警、两个指标缺口已补，告警实测触发。
 > **K 也已完成**（2026-10-30，见 [`helm/hookflow/`](../helm/hookflow/)）：kind 实测滚动更新/杀 worker/HPA。
-> 下一步是 **C（CI/CD 补完）**。
+> **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
+> GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
+> **未验证**：GHCR 推送、Helm OCI 发布、Codecov 上传（没有 token/没在 Actions 上跑过）。
+> 下一步是 **U（控制台小缺口）**。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -424,16 +427,27 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 > **执行任务书：[task-c-brief.md](task-c-brief.md)**（自包含，新对话先读它；包含当前基线、
 > 精确改法、`argLine` 时区坑、Python SDK 未实现的处理、以及哪些项不能声称已验证）。
 
-- [ ] 后端接 JaCoCo（单测即可，IT 不跑覆盖率以免拖慢 CI）→ Codecov 上传
-      （没有 `CODECOV_TOKEN` 就跳过并标注）
-- [ ] `.github/workflows/docker.yml`：push master + tag → buildx 构建并推 `ghcr.io/shifang37/hookflow`
-      （`packages: write`，tag 用 sha + latest）
-- [ ] Helm 发布：`helm package` + 推 OCI（`oci://ghcr.io/shifang37/charts`）或 chart-releaser；
-      依赖 K 完成
-- [ ] README 换**实时** CI 徽章（现在是静态 shields）
-- [ ] SDK（J）与 Python SDK（P）的 job 都在 CI 里
+- [x] 后端接 JaCoCo（单测即可，IT 不跑覆盖率以免拖慢 CI）→ Codecov 上传
+      （没有 `CODECOV_TOKEN` 就跳过并标注）。本机验证：`-Pcoverage test` **164 个通过**、
+      LINE **26.1%**（728/2786）、`target/site/jacoco/jacoco.xml` 生成；上传步骤在 `ci.yml` 里，
+      但仓库没有 token，**没有上传过**（步骤会打印原因并跳过）。
+- [x] `.github/workflows/docker.yml`：push master + tag → buildx 构建并推 `ghcr.io/shifang37/hookflow`
+      （`packages: write`，tag 用 sha + latest）。workflow 已就绪；本地 `npm run build:backend` 通过，
+      但 `docker build` 卡在容器内 Maven `dependency:go-offline`（网络），**镜像没有构建完成、
+      没有在 Actions 上跑过、没有推过 GHCR**。
+- [x] Helm 发布：`helm package` + 推 OCI（`oci://ghcr.io/shifang37/charts`）或 chart-releaser；
+      依赖 K 完成。`helm-publish.yml` 已就绪；本地只验证了 `helm package`/`helm lint`，**没有真正 push**。
+- [x] README 换**实时** CI 徽章（现在是静态 shields）：CI / Docker / Helm / Java SDK 四个实时徽章；
+      Codecov 徽章等到能上传成功再加（否则长期 unknown）。
+- [x] SDK（J）与 Python SDK（P）的 job 都在 CI 里：Java 用已有的 `sdk.yml`；`python-sdk.yml` 已预置，
+      路径过滤使它**在 P 落地前不会运行**，不能算「Python SDK 已过 CI」。
 
-验收 = 路线图 optimization-roadmap.md L1752 的 5 条，逐条能指到一个 workflow 步骤。
+**完成状态**：CI 的 5 条验收里，「每次 push 自动运行测试」「README 徽章」已生效；
+「Codecov 上传」「master 自动构建镜像」「tag 发布 Helm」三者的 workflow 已写好，
+但**没有 token / 没有在 Actions 上验证**，不能声称已绿。Python job 同理，只是预置。
+验收对照见 [optimization-roadmap.md](optimization-roadmap.md) P2 的「实现位置」。
+
+验收 = 路线图 optimization-roadmap.md P2「验收标准」的 5 条，逐条能指到一个 workflow 步骤。
 
 ---
 
@@ -520,7 +534,7 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |
 | P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |
-| P2 CI/CD | ◐（测试流水线有，Codecov/镜像/Helm/徽章无） | C |
+| P2 CI/CD | ✅ 基本完成：JaCoCo 单测覆盖率 + Codecov 步骤、`docker.yml`、`helm-publish.yml`、实时徽章、`python-sdk.yml` 预置；**GHCR/Helm push/Codecov 上传未验证** | C（已完成） |
 | P2 Python SDK | ❌ | P |
 | P3 性能（2000/s） | ◐（5 轮优化 + 报告，目标未达） | H |
 

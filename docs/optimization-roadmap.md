@@ -1757,7 +1757,10 @@ hookflow_outbox_backlog
 
 ## P2：CI/CD 完善
 
-### 现状问题
+> **状态（2026-10-30）**：已实现，见下方「实现位置」。三件依赖外部权限的事
+> （GHCR 推送、Helm OCI 发布、Codecov 上传）**没有验证**，不要标成已绿。
+
+### 现状问题（v0.4 之前）
 
 - 没有自动化构建和测试流程
 - 缺少代码质量检查
@@ -1776,11 +1779,30 @@ hookflow_outbox_backlog
 
 ### 验收标准
 
-- [ ] 每次 push 自动运行测试
-- [ ] 覆盖率报告自动上传到 Codecov
-- [ ] master 分支自动构建 Docker 镜像
-- [ ] 打 tag 自动发布 Helm Chart
-- [ ] README 显示 CI 状态徽章
+- [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）
+- [x] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
+      **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`）
+- [x] master 分支自动构建 Docker 镜像 —— `docker.yml`（push `master` / tag `v*`，先 `npm run build:backend`
+      再 buildx 推 `ghcr.io/shifang37/hookflow`）。**未在 Actions 上跑过、未推过 GHCR**
+- [x] 打 tag 自动发布 Helm Chart —— `helm-publish.yml`（tag `helm-v*`，`helm package --version <tag>` 后推
+      `oci://ghcr.io/shifang37/charts`）。**没有实际 push 过**
+- [x] README 显示 CI 状态徽章 —— 换成 GitHub Actions 实时徽章（CI / Docker / Helm / Java SDK）
+
+### 实现位置
+
+| 内容 | 文件 |
+|---|---|
+| 测试 + 覆盖率采集 + Codecov 步骤 | `.github/workflows/ci.yml`，根 `pom.xml` 的 `coverage` profile |
+| 镜像构建与推送 | `.github/workflows/docker.yml` |
+| Chart 校验（lint/render） | `.github/workflows/helm.yml` |
+| Chart 发布（OCI） | `.github/workflows/helm-publish.yml` |
+| Java SDK | `.github/workflows/sdk.yml`（发布：`sdk-publish.yml`） |
+| Python SDK（预置） | `.github/workflows/python-sdk.yml`；`sdk/python/` 还不存在，路径过滤使它现在不会运行 |
+
+本机能验证的是：`./mvnw -o -Pcoverage test`（164 个通过，LINE 26.1%，仅单测）、
+`helm package`/`helm lint`、前端 77 个测试与 `npm run build:backend`。
+`docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），**镜像没有构建完成**；
+GHCR 推送和 Codecov 只能在 GitHub Actions 页面看，本地无法伪造。
 
 ---
 

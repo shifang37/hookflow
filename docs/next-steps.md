@@ -24,16 +24,23 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
 | 后端单测 | **164 个通过** | `./mvnw -o test` |
+| 后端单测覆盖率 | **LINE 26.1%**（728/2786）、BRANCH 25.4%，仅单测；IT 不采集 | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
 | 前端单测 | **77 个通过**（15 个文件），~35s | `cd frontend && npm test` |
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**GHCR 推送、Helm OCI 发布、Codecov 上传都没有实际验证** | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
 前端构建产物会复制到 `src/main/resources/static/ui/`（已在 `.gitignore` 里，不入库）。
 后端从 `/ui/` 提供这个控制台，`/ui/events` 这类客户端路由由 `UiForwardController` 兜到 `index.html`。
+
+> 2026-10-30 复跑时 `ReadApiIT.latencyHistogramIsComplete` 第一次失败（`samples=3809`、`buckets=3803`）：
+> `ReportService.latency` 的 samples 与 buckets 是两条 SQL，期间后台 worker 写入了 6 行。单独复跑
+> `ReadApiIT`（17 个）和整套 `verify`（69 个）都通过。这是既有的时间窗竞态，不是任务 C 引入的；
+> 要根治得让两条查询读同一个快照，暂未改。
 
 ---
 
@@ -254,7 +261,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 发布 workflow 就绪但**尚未实际发布** |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
-| P2 CI/CD | 前端 job 已加；Docker 镜像、Helm 发布、Codecov 未做 |
+| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**未验证**：GHCR 镜像推送、Helm OCI 发布、Codecov 上传（没有 token/未在 Actions 上跑过） |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 
@@ -282,6 +289,12 @@ hook），整包函数覆盖 49.7% → **61.2%**。
   ```
 - 项目约定：`DeliveryMapper` 是**状态机**（每条 SQL 都是 CAS，测试可以依赖）；报表查询放 `ReportMapper`。
   时间窗口一律用 MySQL 的 `NOW(3)` 算，不要用 JVM 时钟（`docs/failures/0002-two-clocks.md`）。
+- **JaCoCo 的 agent 必须用 `@{jacoco.argLine}`（late replacement）拼进 surefire 的 `argLine`**，
+  不能用 `${jacoco.argLine}`：`${...}` 在 `prepare-agent` 之前就解析成空串，164 个测试照常通过，
+  但 `target/jacoco.exec` 不存在，report 会报 "missing execution data file"。不激活 `coverage`
+  profile 时该属性是空串，`mvn test` 行为不变。
+- `verify` 需要 Docker；本机 Docker daemon 在受限文件策略下可能报 npipe `permission denied`，
+  切到 `danger-full-access` 后 `docker version` 正常。
 
 **前端**
 
@@ -306,9 +319,11 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 
 - 提交时 `git add` 一度报 `Unable to create '.git/index.lock': Permission denied`，同时 `src/`、`docs/`
   等子目录也写不进去：根目录有沙箱 SID（`S-1-4-…`）的继承写权限，但这些子目录的 ACL 继承是断的。
-  受限模式下 `icacls` 改不了 ACL（没有 WRITE_DAC，连 `/inheritance:e` 都会被拒），
-  把 DSH 文件策略切到 `danger-full-access` 之后写入立刻恢复。再遇到就先查 `(Get-Acl <dir>).Access`
-  里有没有那个 `S-1-4-…` 条目。
+  受限模式下 `icacls` 改不了 ACL（没有 WRITE_DAC，连 `/inheritance:e` 都会被拒）。
+  **有效的修复**：切到 `danger-full-access` 跑一次 `Set-Acl`，在仓库根加一条该 `S-1-4-…` SID 的
+  `ContainerInherit,ObjectInherit` Modify ACE；已有子目录（`target/` 等）会自动继承，之后
+  `workspace-write` 下构建/提交恢复正常（本次就是这么修的）。再遇到先查
+  `(Get-Acl <dir>).Access` 里有没有那个 `S-1-4-…` 条目。
 
 ---
 
@@ -362,11 +377,14 @@ ae43506 feat: operator console - admin read API and a React UI
 7. ~~F：`topFailureReasons` 无真实死信~~ —— 已完成：`FailureReasonsIT` 覆盖分组、百分比分母和 `LIMIT`，见 §4F。
 8. ~~G：V4 索引收益未量化~~ —— 已完成：图表查询 316 → 132 ms（2.4×），settle −10%、insert −7%，
    见 [performance.md §23](performance.md#23-v4-的索引图表查询快-24-倍settle-慢-10) 与 `docs/perf/2026-10-29-v4-index/`。
-9. **J（Java SDK）、G（Grafana）、K（K8s/Helm）已完成**：SDK 见
+9. **J（Java SDK）、G（Grafana）、K（K8s/Helm）、C（CI/CD）已完成**：SDK 见
    [`sdk/java/README.md`](../sdk/java/README.md)，监控见 [monitoring.md](monitoring.md)，
-   chart 见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)。剩余工作按
-   [remaining-plan.md](remaining-plan.md)：**C（CI/CD）→ U（控制台小缺口）→ P（Python SDK）→
-   H（P3 性能）**。C 的独立执行任务书是 [task-c-brief.md](task-c-brief.md)。
+   chart 见 [`helm/hookflow/README.md`](../helm/hookflow/README.md)，CI/CD 见
+   [README 的 CI/CD 一节](../README.md#cicd每次-push-自动跑什么) 和 `.github/workflows/`。
+   剩余工作按 [remaining-plan.md](remaining-plan.md)：**U（控制台小缺口）→ P（Python SDK）→
+   H（P3 性能）**。C 里有三件事**没有**验证过，不要当成已绿：GHCR 镜像推送、Helm OCI 发布、
+   Codecov 上传（仓库没有 `CODECOV_TOKEN`，步骤会跳过并打印原因）；`python-sdk.yml` 只是预置，
+   `sdk/python/` 还不存在。
 10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。
