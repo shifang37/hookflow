@@ -460,15 +460,17 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ## 6. 任务 U：控制台小缺口（0.5–1 天，可穿插做）
 
-1. **投递详情抽屉**：后端 `GET /v1/deliveries/{id}` 已有（含 attempt 历史），UI 没接。
-   加 `useDeliveryDetail` + 抽屉（attempt 表）+ 测试。
-2. **租户停用/启用**：比"删除"安全。`PATCH /v1/admin/tenants/{id}` 现在只收 rate/budget/weight，
-   加 `status`（ACTIVE/SUSPENDED）+ UI 按钮。**不建议做租户删除**（级联、审计、误删风险），
-   在文档里写清为什么。
-3. **Endpoint 测试发送**：`POST /v1/endpoints/{id}/test`，同步发一条合成 webhook（不入库），
-   返回状态码/耗时/响应前 512 字节；需要解密 endpoint 密钥、走 egress guard、限频。
-4. **修签名提示**（J.3 里那两处错误公式）。
-5. （可选）事件筛选加时间范围；投递筛选加时间范围。
+> **状态（2026-10-30）**：1–3 已完成；4 的现有提示已核对为正确公式，还差一条前端断言；5 可选，未做。
+
+1. **投递详情抽屉** —— 已完成：`useDeliveryDetail` + `DeliveryDetailDrawer`（attempt 表、响应预览）；
+   `GET /v1/deliveries/{id}` 的现有后端契约未改。
+2. **租户停用/启用** —— 已完成：`PATCH /v1/admin/tenants/{id}` 接受 `status`（ACTIVE/SUSPENDED），
+   抽屉里有停用/启用按钮。**不做租户硬删除**（级联、审计、误删风险），停用是可逆的生命周期操作。
+3. **Endpoint 测试发送** —— 已完成：`POST /v1/endpoints/{id}/test` 同步发一条合成 webhook，
+   返回状态码/耗时/响应前 512 字节；复用 `HttpDeliverer` 的签名路径、走 egress guard、每个
+   endpoint 每秒限一次，不写 event/delivery/attempt。
+4. **修签名提示**（J.3 里那两处错误公式）—— 代码里的提示已是正确公式，待补一条前端断言。
+5. （可选）事件筛选加时间范围；投递筛选加时间范围 —— 未做。
 
 ---
 
@@ -536,8 +538,8 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 | 路线图项 | 状态 | 本计划中的任务 |
 |---|---|---|
-| P0 前端可视化 | ✅ 基本完成（缺投递详情、移动端验证） | U-1 |
-| P0 管理后台 | ✅ 基本完成（缺租户状态、Endpoint 测试、告警/设置） | U-2、U-3 |
+| P0 前端可视化 | ✅ 基本完成（缺移动端验证） | U-1（已完成） |
+| P0 管理后台 | ✅ 基本完成（缺登录、租户硬删除、告警/设置） | U-2、U-3（已完成） |
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |
 | P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |

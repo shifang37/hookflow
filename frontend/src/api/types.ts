@@ -151,6 +151,21 @@ export interface CreateEndpointRequest {
   maxConcurrency?: number
 }
 
+/**
+ * Result of a synchronous probe. `success` and `retryable` use the delivery worker's
+ * classification; `statusCode` is null for a timeout / connect error, and
+ * `responsePreview` is already truncated by the server.
+ */
+export interface EndpointTestResult {
+  endpointId: number
+  success: boolean
+  retryable: boolean
+  statusCode: number | null
+  errorClass: string | null
+  durationMs: number
+  responsePreview: string | null
+}
+
 /** `*` means "every event type"; anything else is an exact, comma-separated list. */
 export const WILDCARD_SUBSCRIPTION = '*'
 

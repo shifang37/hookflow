@@ -180,6 +180,22 @@ export function useDeleteEndpoint() {
   })
 }
 
+/**
+ * One synchronous probe. It does not invalidate anything: no event, delivery or endpoint
+ * state changed, and refetching the list would only make the button look like it did.
+ */
+export function useTestEndpoint() {
+  return useMutation({
+    mutationFn: ({
+      endpointId,
+      payload,
+    }: {
+      endpointId: number
+      payload?: Record<string, unknown>
+    }) => api.testEndpoint(endpointId, payload),
+  })
+}
+
 export function useTenants(query: TenantQuery) {
   return useQuery({
     queryKey: queryKeys.tenants(query),

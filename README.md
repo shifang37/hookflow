@@ -345,8 +345,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 164 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 164 单元 + 69 集成 = 233 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
+./mvnw test      # 174 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
+./mvnw verify    # 174 单元 + 71 集成 = 245 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -395,7 +395,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 164 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（69 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #20 绿**（build 第一次因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error（77 个测试全过），已升级 Vitest 4.1.12 并把 AppShell 的 20s 显式超时统一到 60s |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 174 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（71 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
@@ -404,8 +404,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；首次添加时它曾因 workflow 文件自身触发而失败一次（没有 `sdk/python`），已把自身从触发路径移除；`helm-v0.1.0` tag 又误触发过一次（GitHub 对 tag push 不评估 paths），已加 `branches: ['**']`，任务 P 落地后由 `sdk/python/**` 自动生效 |
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
-164 个测试的 **LINE 26.1%**（728/2786，另有 BRANCH 25.4%），报告在 `target/site/jacoco/`。
-这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 69 个 IT 覆盖的路径不计入，所以不要拿它
+174 个测试的 **LINE 28.3%**（801/2831，另有 BRANCH 28.2%），报告在 `target/site/jacoco/`。
+这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 71 个 IT 覆盖的路径不计入，所以不要拿它
 和 SDK 的 92.9%（SDK 自己的测试）比较。
 
 三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`，各 workflow 顶部注释写了原因。
@@ -561,8 +561,9 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 
 - 单 region、单 MySQL 主库，没有分片
 - Python SDK 未提供；**Java SDK** 在 [`sdk/java/`](sdk/java/README.md)（独立的 Maven 项目，`mvn install` 后即可引用）
-- 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通、API Key 轮换、Endpoint 增删改查（含软删除）、
-  事件详情（payload + 扇出投递）、单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」已齐；
+- 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通/停用/启用、API Key 轮换、Endpoint
+  增删改查（含软删除）与测试发送、事件详情（payload + 扇出投递）、投递详情（attempt 历史）、
+  单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」除刻意不做的租户硬删除外已齐；
   K8s/Helm 已就绪（[`helm/hookflow/`](helm/hookflow/README.md)），Prometheus + Grafana
   监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；CI/CD 流水线已就绪（见上文，
   **GHCR 镜像和 Helm OCI chart 都已实际验证；Codecov 上传仍未验证**）；剩余的是 Python SDK 和 P3 性能

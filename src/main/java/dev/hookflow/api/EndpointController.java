@@ -3,11 +3,13 @@ package dev.hookflow.api;
 import dev.hookflow.api.dto.Dtos.CreateEndpointRequest;
 import dev.hookflow.api.dto.Dtos.EndpointCreatedResponse;
 import dev.hookflow.api.dto.Dtos.EndpointResponse;
+import dev.hookflow.api.dto.Dtos.EndpointTestResponse;
 import dev.hookflow.common.auth.ApiKeyPrincipal;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.web.PageResponse;
 import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.service.EndpointService;
+import dev.hookflow.service.EndpointTestService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.context.annotation.Profile;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/v1/endpoints")
@@ -33,9 +36,11 @@ public class EndpointController {
     private static final String SCOPE = "endpoint:write";
 
     private final EndpointService endpointService;
+    private final EndpointTestService endpointTestService;
 
-    public EndpointController(EndpointService endpointService) {
+    public EndpointController(EndpointService endpointService, EndpointTestService endpointTestService) {
         this.endpointService = endpointService;
+        this.endpointTestService = endpointTestService;
     }
 
     @PostMapping
@@ -84,6 +89,25 @@ public class EndpointController {
     public EndpointResponse resume(@PathVariable long endpointId) {
         requireScope(SCOPE);
         return toResponse(endpointService.resume(ApiKeyPrincipal.Context.requireTenantId(), endpointId));
+    }
+
+    /**
+     * Sends one synthetic webhook and returns the receiver's answer. No event/delivery row
+     * is written, so this is safe to run against a production callback while debugging.
+     *
+     * <p>Paused endpoints are testable on purpose: the most common time to press this button
+     * is before resuming one.
+     */
+    @PostMapping("/{endpointId}/test")
+    @Operation(summary = "Send a synchronous synthetic webhook; nothing is persisted")
+    public EndpointTestResponse test(@PathVariable long endpointId,
+                                     @RequestBody(required = false) Map<String, Object> payload) {
+        requireScope(SCOPE);
+        EndpointTestService.TestOutcome outcome = endpointTestService.test(
+                ApiKeyPrincipal.Context.requireTenantId(), endpointId, payload);
+        return new EndpointTestResponse(endpointId, outcome.success(), outcome.retryable(),
+                outcome.statusCode(), outcome.errorClass(), outcome.durationMs(),
+                outcome.responsePreview());
     }
 
     /**

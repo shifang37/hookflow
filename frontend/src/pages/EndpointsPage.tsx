@@ -30,6 +30,7 @@ import { formatTimestamp } from '@/api/time'
 import { WILDCARD_SUBSCRIPTION, type CreateEndpointRequest, type Endpoint, type EndpointCreated } from '@/api/types'
 import { PageTitle } from '@/components/PageTitle'
 import { CredentialAlert } from '@/components/CredentialAlert'
+import { EndpointTestModal } from '@/components/EndpointTestModal'
 import { SecretRevealModal } from '@/components/SecretRevealModal'
 import { EndpointStatusTag, LiveBadge } from '@/components/StatusTag'
 
@@ -67,6 +68,7 @@ export function EndpointsPage() {
   const [page, setPage] = useState(0)
   const [createOpen, setCreateOpen] = useState(false)
   const [created, setCreated] = useState<EndpointCreated | undefined>(undefined)
+  const [testTarget, setTestTarget] = useState<Endpoint | undefined>(undefined)
 
   const query = useMemo<EndpointQuery>(() => ({ page, size: PAGE_SIZE }), [page])
   const { data, error, isFetching, refetch } = useEndpoints(query)
@@ -145,13 +147,16 @@ export function EndpointsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 188,
+      width: 240,
       render: (_, endpoint) => {
         const busy =
           statusMutation.isPending && statusMutation.variables?.endpointId === endpoint.id
         const deleting = deleteMutation.isPending && deleteMutation.variables === endpoint.id
         return (
           <Space size={4}>
+            <Button size="small" type="link" onClick={() => setTestTarget(endpoint)}>
+              测试
+            </Button>
             {endpoint.status === 'ACTIVE' ? (
               <Popconfirm
                 title="暂停这个 Endpoint？"
@@ -200,7 +205,7 @@ export function EndpointsPage() {
     <div>
       <PageTitle
         title="Endpoints"
-        subtitle="客户的回调目标 · 需要租户 API Key（创建/暂停/删除还需要 endpoint:write 权限）"
+        subtitle="客户的回调目标 · 需要租户 API Key（创建/暂停/删除/测试还需要 endpoint:write 权限）"
         actions={
           <Space>
             <LiveBadge intervalMs={POLL_INTERVAL_MS.endpoints} fetching={isFetching} />
@@ -276,6 +281,14 @@ export function EndpointsPage() {
         subject={created === undefined ? undefined : `#${created.id} · ${created.url}`}
         onClose={() => setCreated(undefined)}
       />
+
+      {testTarget !== undefined && (
+        <EndpointTestModal
+          key={testTarget.id}
+          endpoint={testTarget}
+          onClose={() => setTestTarget(undefined)}
+        />
+      )}
     </div>
   )
 }

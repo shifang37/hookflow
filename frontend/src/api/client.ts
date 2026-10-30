@@ -9,6 +9,7 @@ import type {
   DeliveryStatus,
   Endpoint,
   EndpointCreated,
+  EndpointTestResult,
   EventDetail,
   Interval,
   IssuedKey,
@@ -212,6 +213,17 @@ export const api = {
 
   resumeEndpoint: (endpointId: number) =>
     request<Endpoint>('tenant', { method: 'POST', url: `/v1/endpoints/${endpointId}/resume` }),
+
+  /**
+   * One synthetic webhook. The payload (if any) is the request body itself, not a
+   * wrapper: the backend forwards exactly these bytes as the test event's payload.
+   */
+  testEndpoint: (endpointId: number, payload?: Record<string, unknown>) =>
+    request<EndpointTestResult>('tenant', {
+      method: 'POST',
+      url: `/v1/endpoints/${endpointId}/test`,
+      data: payload,
+    }),
 
   /**
    * Soft-deletes: queued deliveries become CANCELED, the endpoint disappears from every

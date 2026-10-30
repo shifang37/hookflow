@@ -88,6 +88,24 @@ public final class Dtos {
     }
 
     /**
+     * One synthetic delivery to an endpoint, executed synchronously for the console's
+     * "test" button. No event, delivery or attempt row is written.
+     *
+     * <p>{@code statusCode} is null when the request never got an HTTP response
+     * (connect error / timeout); {@code retryable} carries the same classification the
+     * delivery worker would use.
+     */
+    public record EndpointTestResponse(
+            long endpointId,
+            boolean success,
+            boolean retryable,
+            Integer statusCode,
+            String errorClass,
+            int durationMs,
+            String responsePreview) {
+    }
+
+    /**
      * One event with the payload it was accepted with and the deliveries it fanned out to.
      *
      * <p>{@code payload} is the <b>raw JSON string</b>, not a parsed object: the platform

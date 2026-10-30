@@ -118,6 +118,12 @@ describe('api request functions', () => {
         uri: '/v1/endpoints/3/resume',
       },
       {
+        name: 'testEndpoint',
+        call: () => api.testEndpoint(3, { orderId: 123 }),
+        method: 'POST',
+        uri: '/v1/endpoints/3/test',
+      },
+      {
         name: 'deleteEndpoint',
         call: () => api.deleteEndpoint(3),
         method: 'DELETE',
@@ -228,6 +234,7 @@ describe('api request functions', () => {
     await api.createEndpoint({ url: 'https://a.io/hook', maxAttempts: 8, maxConcurrency: 0 })
     await api.replayDeliveries([1, 2])
     await api.updateTenant(1, { weight: 3 })
+    await api.testEndpoint(3, { orderId: 123 })
 
     expect(bodyOf(calls[0])).toEqual({
       url: 'https://a.io/hook',
@@ -237,6 +244,8 @@ describe('api request functions', () => {
     expect(bodyOf(calls[1])).toEqual({ deliveryIds: [1, 2] })
     expect(bodyOf(calls[2])).toEqual({ weight: 3 })
     expect(calls[2]?.method).toBe('PATCH')
+    // The probe payload is the request body itself; the backend forwards it verbatim.
+    expect(bodyOf(calls[3])).toEqual({ orderId: 123 })
   })
 
   it('fails before the request goes out when the credential is missing', async () => {

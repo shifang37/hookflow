@@ -300,6 +300,18 @@ curl -X POST localhost:8080/v1/endpoints \
 
 恢复。**已取消的投递不会复活**——需要重放请针对具体 delivery 操作。
 
+### POST /v1/endpoints/{id}/test
+
+同步发一条**合成 webhook**，用于验证地址、签名和接收方响应。需要 `endpoint:write`。
+
+- 请求体可选，必须是一个 JSON 对象；留空发送 `{}`。它原样成为事件的 `payload`
+- **不写入** `event` / `delivery` / `delivery_attempt`，因此不会出现在任何事件或投递列表里
+- 使用 endpoint 已保存的签名密钥，接收方可以按真实投递的方式验签
+- 合成请求头：`X-HookFlow-Event-Id: 0`、`X-HookFlow-Delivery-Id: 0`、`X-HookFlow-Event-Type: endpoint.test`、`X-HookFlow-Attempt: 1`
+- 已暂停的 endpoint 也可以测试（通常在恢复前验证地址）
+- 每个 endpoint 每秒最多一次（按应用实例计）；超限 `429`，payload 超过投递上限 `413`
+- `200` → `{"endpointId":1,"success":true,"retryable":false,"statusCode":200,"errorClass":null,"durationMs":42,"responsePreview":"{\"ok\":true}"}`；`statusCode` 为 `null` 表示超时/连接失败
+
 ### DELETE /v1/endpoints/{id}
 
 `204`，没有 body。软删除，但对外部世界是删除：

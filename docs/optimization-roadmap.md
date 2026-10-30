@@ -7,8 +7,8 @@
 并在前端控制台、Java SDK、K8s 和监控上完成了大部分产品化工作。
 
 > **状态同步（2026-10-30）**：以下勾选已按当前 `master`（`78dd725`）复核；
-> 完成度速览见下一节。当前基线：后端 164 单测 + 69 集成、前端 77、Java SDK 66，
-> 共 376 个测试；15 条 ADR。
+> 完成度速览见下一节。当前基线：后端 174 单测 + 71 集成、前端 81、Java SDK 66，
+> 共 392 个测试；15 条 ADR。
 
 **核心原则**：
 - ✅ 优先提升**可视化**和**易用性**（面试时更容易展示）
@@ -38,7 +38,7 @@
 | 优化项 | 状态 | 验收 | 说明 |
 |---|---|---|---|
 | P0 前端可视化 | 🟡 基本完成 | 5/6 | 5 个页面、2s 轮询、图表、覆盖率达标；移动端未实测 |
-| P0 管理后台 | 🟡 基本完成 | 3/5 | 主要 CRUD 可在 UI 完成；无登录、租户停用/删除、Endpoint 测试、告警/设置 |
+| P0 管理后台 | 🟡 基本完成 | 3/5 | 主要 CRUD、租户停用、Endpoint 测试可在 UI 完成；无登录、租户硬删除、告警/设置 |
 | P1 Java SDK | 🟢 已实现，未发布 | 5/6 | 66 测试、行覆盖 92.9%；未发布到 GitHub Packages / Maven Central |
 | P1 K8s 部署 | ✅ 已完成 | 5/5 | Helm chart、HPA、探针、优雅停机，kind 实测 |
 | P1 监控面板 | ✅ 已完成 | 4/4 | 3 个面板、2 条告警、compose `monitoring` profile |
@@ -55,8 +55,8 @@
 > **状态（2026-10-30）**：基本完成。运营控制台在 [`frontend/`](../frontend/)，
 > React 18 + TypeScript + Vite + Ant Design + React Query + Zustand + Recharts；
 > 生产构建由后端从 `/ui/` 提供。5 个页面（事件流 / 投递 / Endpoints / 租户 / 系统监控）
-> 都接真实接口，事件流 2s 轮询，前端 77 个测试、语句覆盖 69.16%。
-> 缺口：移动端未实测；单条投递详情抽屉未接（后端 `GET /v1/deliveries/{id}` 已有）。
+> 都接真实接口，事件流 2s 轮询，前端 81 个测试、语句覆盖约 69%。
+> 缺口：移动端未实测。单条投递详情抽屉已接（attempt 历史走 `GET /v1/deliveries/{id}`）。
 
 ### 立项时的现状问题（已解决）
 
@@ -320,7 +320,7 @@ cd frontend && npm run build
 ### 验收标准
 
 - [x] 使用 React + TypeScript + Vite 搭建
-- [x] 至少包含 4 个页面：事件流、投递详情、租户管理、系统监控（另有 Endpoints 页；投递页目前是列表/状态/重放，单条 attempt 详情抽屉未接）
+- [x] 至少包含 4 个页面：事件流、投递详情、租户管理、系统监控（另有 Endpoints 页；投递详情抽屉可看 attempt 历史）
 - [x] 实时刷新（事件流 2s、投递 3s 轮询；满足 ≤3s）
 - [x] 至少 1 个交互式图表（吞吐折线 + 延迟分布，Recharts）
 - [ ] 响应式设计，支持移动端查看 —— 布局已做断点（侧栏折叠、卡片栅格、表格横向滚动），但没有移动端实测
@@ -340,8 +340,8 @@ cd frontend && npm run build
 > [`frontend/`](../frontend/) 操作；读接口与租户策略更新在
 > [`AdminConsoleController.java`](../src/main/java/dev/hookflow/api/AdminConsoleController.java)，
 > 开通与 Key 轮换在 [`AdminController.java`](../src/main/java/dev/hookflow/api/AdminController.java)。
-> 缺口：没有登录体系（用 Bootstrap Token + 租户 API Key），没有租户停用/删除、
-> Endpoint 测试发送、告警阈值和系统设置页。
+> 租户停用/启用和 Endpoint 测试发送已支持；缺口：没有登录体系（用 Bootstrap Token +
+> 租户 API Key），刻意不做租户硬删除，告警阈值和系统设置页未做。
 
 ### 立项时的现状问题（已解决）
 
@@ -756,7 +756,7 @@ public class SecurityConfig {
 ### 验收标准
 
 - [x] 至少 5 个页面：租户列表、租户详情、创建租户、Endpoint 管理、监控大盘（详情和创建是抽屉/弹窗，不是独立路由）
-- [ ] 所有 CRUD 操作可通过 UI 完成，无需 curl —— 现有资源均可增删改查；但租户删除/停用、Endpoint 测试发送没有做
+- [ ] 所有 CRUD 操作可通过 UI 完成，无需 curl —— 现有资源均可增删改查；租户停用/启用和 Endpoint 测试已支持，但租户硬删除（刻意不做）、告警/设置没有做
 - [ ] 有基础的权限控制（需登录）—— 现在是 Bootstrap Token / 租户 API Key 鉴权，没有登录、账号和角色
 - [x] 至少 1 个统计报表（租户级 + 系统级）
 - [x] 表单有客户端和服务端双重验证
@@ -1837,8 +1837,8 @@ hookflow_outbox_backlog
 | Java SDK | `.github/workflows/sdk.yml`（发布：`sdk-publish.yml`） |
 | Python SDK（预置） | `.github/workflows/python-sdk.yml`；`sdk/python/` 还不存在，路径过滤使它现在不会运行 |
 
-本机能验证的是：`./mvnw -o -Pcoverage test`（164 个通过，LINE 26.1%，仅单测）、
-`helm package`/`helm lint`、前端 77 个测试与 `npm run build:backend`。
+本机能验证的是：`./mvnw -o -Pcoverage test`（174 个通过，LINE 28.3%，仅单测）、
+`helm package`/`helm lint`、前端 81 个测试与 `npm run build:backend`。
 `docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
 但 **GitHub Actions 的 `docker` run #8 已经成功构建并推送 GHCR**。
 Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；只剩 Codecov 上传未验证，本地无法伪造。
