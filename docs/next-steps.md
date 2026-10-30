@@ -30,7 +30,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
-| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 构建并推送 GHCR 成功、`ci` run #15 后端 build 成功；**未验证**：Helm OCI 发布、Codecov 上传 | `.github/workflows/` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 构建并推送 GHCR 成功、`ci` runs #15–#17 后端 build 成功；**仍红**：前端 coverage（run #17 进程级 exit 1，已加 4GB 堆）；**未验证**：Helm OCI 发布、Codecov 上传 | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -261,7 +261,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 发布 workflow 就绪但**尚未实际发布** |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
-| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR 成功、ci run #15/#16 后端 build 成功（前端 coverage 的 30s 超时已把全局和两个 create 测试都提到 60s）；**未验证**：Helm OCI 发布、Codecov 上传（没有 token） |
+| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR 成功、ci runs #15–#17 后端 build 成功；**仍红**：前端 coverage（runs 13–16 超时、run #17 进程级 exit 1，已加 60s 超时 + 4GB 堆）；**未验证**：Helm OCI 发布、Codecov 上传（没有 token） |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 

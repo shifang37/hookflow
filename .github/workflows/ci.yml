@@ -103,6 +103,12 @@ jobs:
   # must not block the frontend's 30 seconds.
   frontend:
     runs-on: ubuntu-latest
+    env:
+      # AntD + jsdom + v8 coverage: the default V8 heap is the first thing to go
+      # once the slow create/drawer tests are allowed to finish instead of
+      # timing out (run 17 exited 1 with no failing-test annotation, which is the
+      # signature of a process-level memory failure rather than an assertion).
+      NODE_OPTIONS: --max-old-space-size=4096
     defaults:
       run:
         working-directory: frontend
@@ -129,8 +135,10 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # The github-actions reporter turns a failed test into a check annotation,
+      # so a red run names the test even before anyone opens the log.
       - name: Unit tests with coverage
-        run: npm run test:coverage
+        run: npm run test:coverage -- --reporter=default --reporter=github-actions
 
       - name: Production build
         run: npm run build
