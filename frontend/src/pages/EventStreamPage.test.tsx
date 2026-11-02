@@ -24,6 +24,7 @@ import {
   useEvents,
 } from '@/api/queries'
 import { ApiError } from '@/api/client'
+import { toApiTimestamp } from '@/api/time'
 import { EventStreamPage } from './EventStreamPage'
 
 const mockedUseEvents = vi.mocked(useEvents)
@@ -213,5 +214,34 @@ describe('EventStreamPage', () => {
 
     expect(await screen.findByText('选中的事件没有死信投递')).toBeInTheDocument()
     expect(mutate).not.toHaveBeenCalled()
+  })
+
+  it('sends a picked time window to the API as UTC and goes back to the first page', () => {
+    mockedUseEvents.mockReturnValue(asResult({ data: pageOf([event(12)]) }))
+
+    renderWithProviders(<EventStreamPage />)
+
+    // Typing into the two inputs is how a keyboard user sets a window, and it does not
+    // depend on which month the popup happens to open on. jsdom does not move focus on a
+    // mouse event, and the picker only treats Enter as a submit while its input is
+    // focused, so the focus is explicit.
+    const start = screen.getByPlaceholderText('开始时间')
+    const end = screen.getByPlaceholderText('结束时间')
+    fireEvent.mouseDown(start)
+    fireEvent.focus(start)
+    fireEvent.change(start, { target: { value: '2026-10-29 00:00:00' } })
+    fireEvent.keyDown(start, { key: 'Enter', code: 'Enter', keyCode: 13 })
+    fireEvent.change(end, { target: { value: '2026-10-30 00:00:00' } })
+    fireEvent.keyDown(end, { key: 'Enter', code: 'Enter', keyCode: 13 })
+
+    const calls = mockedUseEvents.mock.calls
+    const query = calls[calls.length - 1]?.[0]
+    // The picker works in local time; what reaches the wire is the same instant in UTC,
+    // which is why the expectation goes through the same conversion instead of a literal.
+    expect(query).toMatchObject({
+      from: toApiTimestamp(new Date(2026, 9, 29, 0, 0, 0)),
+      to: toApiTimestamp(new Date(2026, 9, 30, 0, 0, 0)),
+      page: 0,
+    })
   })
 })

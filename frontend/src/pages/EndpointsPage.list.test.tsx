@@ -59,6 +59,9 @@ describe('EndpointsPage', () => {
       'HMAC-SHA256(secret, "v1:" + eventId + ":" + deliveryId + ":" + timestamp + ":" + rawBody'
     ))).toBe(true)
     expect(codeTexts).toContain('v1=<hex>')
+    // ...and names the two headers the receiver reads them from.
+    expect(codeTexts).toContain('X-HookFlow-Signature')
+    expect(codeTexts).toContain('X-HookFlow-Timestamp')
     expect(codeTexts.some((text) => text?.includes('timestamp + "."'))).toBe(false)
     // The receiver also has to know the timestamp is epoch seconds with a 5-minute window.
     expect(container.textContent).toContain('epoch 秒')

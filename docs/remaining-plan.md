@@ -26,8 +26,8 @@
 |---|---|---|
 | 后端单测 | **164 个通过** | `.\mvnw.cmd -o test` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
-| 前端单测 | **77 个通过**（15 个文件，~35s） | `cd frontend; npm test` |
-| 前端覆盖率 | 语句 85.62% / 分支 82.83% / 函数 62.13%，~71s | `npm run test:coverage` |
+| 前端单测 | **87 个通过**（16 个文件，~46s） | `cd frontend; npm test` |
+| 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径） | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
 | 监控栈 | Prometheus + Grafana，**3 个面板 / 2 条告警** | `docker compose --profile monitoring up -d`（详见 [monitoring.md](monitoring.md)） |
 | Helm chart | `helm lint` dev/prod 0 failed；kind 上三角色 Ready | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
@@ -460,7 +460,8 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 
 ## 6. 任务 U：控制台小缺口（0.5–1 天，可穿插做）
 
-> **状态（2026-10-30）**：1–3 已完成；4 的现有提示已核对为正确公式，还差一条前端断言；5 可选，未做。
+> **状态（2026-11-02）**：1–5 全部完成。4 的断言其实在修提示的那个 commit（`8efb961`）里就有了，
+> 这次只是核对并补了两个 header 名；5 是纯前端改动，后端本来就接受 `from`/`to`。
 
 1. **投递详情抽屉** —— 已完成：`useDeliveryDetail` + `DeliveryDetailDrawer`（attempt 表、响应预览）；
    `GET /v1/deliveries/{id}` 的现有后端契约未改。
@@ -469,8 +470,16 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 3. **Endpoint 测试发送** —— 已完成：`POST /v1/endpoints/{id}/test` 同步发一条合成 webhook，
    返回状态码/耗时/响应前 512 字节；复用 `HttpDeliverer` 的签名路径、走 egress guard、每个
    endpoint 每秒限一次，不写 event/delivery/attempt。
-4. **修签名提示**（J.3 里那两处错误公式）—— 代码里的提示已是正确公式，待补一条前端断言。
-5. （可选）事件筛选加时间范围；投递筛选加时间范围 —— 未做。
+4. **修签名提示**（J.3 里那两处错误公式）—— 已完成：提示是正确公式，断言在
+   `EndpointsPage.list.test.tsx` 的 `documents the real signature string, not the dot-separated draft`
+   （签名串、`v1=<hex>`、`X-HookFlow-Signature` / `X-HookFlow-Timestamp` 两个 header 名、epoch 秒与 ±300s，
+   并断言旧的 `timestamp + "."` 草稿不再出现）。
+5. **时间范围筛选** —— 已完成（2026-11-02，纯前端）：`GET /v1/events` 与 `GET /v1/deliveries` 本来就接受
+   `from`/`to`（UTC 无时区、`from` 含 `to` 不含）。前端共用 `components/TimeRangeFilter.tsx`：AntD RangePicker
+   按浏览器本地时间选，`timeRangeQuery` 用 `toApiTimestamp` 换成同一瞬间的 UTC 墙钟字符串；事件流与投递页各一个，
+   改范围回到第 0 页，投递页的「清除筛选」一并清掉。`dayjs` 只作类型引用（AntD 自带），没有新增运行时依赖。
+   测试：`time.test.ts`（UTC 转换）、`client.requests.test.ts`（`from`/`to` 上线、`undefined` 不发）、
+   `EventStreamPage.test.tsx` / `DeliveriesPage.test.tsx`（输入窗口 → hook 收到的 `from`/`to`；清除）。
 
 ---
 

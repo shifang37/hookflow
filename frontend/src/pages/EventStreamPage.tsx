@@ -18,6 +18,7 @@ import { CredentialAlert } from '@/components/CredentialAlert'
 import { EventDetailDrawer } from '@/components/EventDetailDrawer'
 import { describeBatchReplay } from '@/components/replayMessage'
 import { EventDeliverySummary, LiveBadge } from '@/components/StatusTag'
+import { TimeRangeFilter, timeRangeQuery, type TimeRange } from '@/components/TimeRangeFilter'
 
 const PAGE_SIZE = 20
 
@@ -37,13 +38,14 @@ const PAGE_SIZE = 20
 export function EventStreamPage() {
   const { message } = App.useApp()
   const [eventType, setEventType] = useState('')
+  const [range, setRange] = useState<TimeRange>(null)
   const [page, setPage] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<number | undefined>(undefined)
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
 
   const query = useMemo<EventQuery>(
-    () => ({ eventType: blankToUndefined(eventType), page, size: PAGE_SIZE }),
-    [eventType, page],
+    () => ({ eventType: blankToUndefined(eventType), ...timeRangeQuery(range), page, size: PAGE_SIZE }),
+    [eventType, range, page],
   )
   const { data, error, isFetching, refetch } = useEvents(query)
   const batchReplay = useBatchReplayDeliveries()
@@ -111,7 +113,7 @@ export function EventStreamPage() {
     <div>
       <PageTitle
         title="事件流"
-        subtitle="按 id 倒序，每行带该事件的投递汇总 · 点一行看 payload 与投递明细 · 需要租户 API Key"
+        subtitle="按 id 倒序，每行带该事件的投递汇总 · 可按类型与时间范围筛选 · 点一行看 payload 与投递明细 · 需要租户 API Key"
         actions={
           <Space>
             <LiveBadge intervalMs={POLL_INTERVAL_MS.eventStream} fetching={isFetching} />
@@ -154,6 +156,13 @@ export function EventStreamPage() {
             style={{ maxWidth: 320 }}
             onSearch={(value) => {
               setEventType(value)
+              setPage(0)
+            }}
+          />
+          <TimeRangeFilter
+            value={range}
+            onChange={(next) => {
+              setRange(next)
               setPage(0)
             }}
           />

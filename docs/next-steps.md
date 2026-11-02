@@ -26,8 +26,8 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 后端单测 | **164 个通过** | `./mvnw -o test` |
 | 后端单测覆盖率 | **LINE 26.1%**（728/2786）、BRANCH 25.4%，仅单测；IT 不采集 | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
 | 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **77 个通过**（15 个文件），~34s | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 69.16% / 分支 73.41% / 函数 59.36% / 行 67.87%，~70s（Vitest 4 的 V8 口径，比 3.x 更严格） | `npm run test:coverage` |
+| 前端单测 | **87 个通过**（16 个文件），~46s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径，比 3.x 更严格） | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
 | CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #20 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；**未验证**：Codecov 上传 | `.github/workflows/` |
@@ -401,4 +401,5 @@ ae43506 feat: operator console - admin read API and a React UI
    `sdk/python/` 还不存在。
 10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
-11. 小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。
+11. ~~小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。~~ 已移除（2026-11-02）；
+    同一轮把 [remaining-plan.md §6](remaining-plan.md) 的 U-4（签名提示断言）与 U-5（时间范围筛选）也收掉了。

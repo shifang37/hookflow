@@ -17,6 +17,7 @@ import { CredentialAlert } from '@/components/CredentialAlert'
 import { DeliveryDetailDrawer } from '@/components/DeliveryDetailDrawer'
 import { describeBatchReplay } from '@/components/replayMessage'
 import { DeliveryStatusTag, LiveBadge, STATUS_META } from '@/components/StatusTag'
+import { TimeRangeFilter, timeRangeQuery, type TimeRange } from '@/components/TimeRangeFilter'
 
 const PAGE_SIZE = 20
 
@@ -32,6 +33,7 @@ export function DeliveriesPage() {
   const { message } = App.useApp()
   const [status, setStatus] = useState<DeliveryStatus | undefined>(undefined)
   const [endpointId, setEndpointId] = useState<number | null>(null)
+  const [range, setRange] = useState<TimeRange>(null)
   const [page, setPage] = useState(0)
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
   const [detailId, setDetailId] = useState<number | undefined>(undefined)
@@ -40,10 +42,11 @@ export function DeliveriesPage() {
     () => ({
       status,
       endpointId: endpointId ?? undefined,
+      ...timeRangeQuery(range),
       page,
       size: PAGE_SIZE,
     }),
-    [status, endpointId, page],
+    [status, endpointId, range, page],
   )
 
   const { data, error, isFetching, refetch } = useDeliveries(query)
@@ -156,7 +159,7 @@ export function DeliveriesPage() {
     <div>
       <PageTitle
         title="投递"
-        subtitle="按状态或 Endpoint 过滤 · 需要租户 API Key"
+        subtitle="按状态、Endpoint 或时间范围过滤 · 需要租户 API Key"
         actions={
           <Space>
             {selectedRowKeys.length > 0 && (
@@ -224,13 +227,21 @@ export function DeliveriesPage() {
               setPage(0)
             }}
           />
-          {(status !== undefined || endpointId !== null) && (
+          <TimeRangeFilter
+            value={range}
+            onChange={(next) => {
+              setRange(next)
+              setPage(0)
+            }}
+          />
+          {(status !== undefined || endpointId !== null || range !== null) && (
             <Button
               type="link"
               size="small"
               onClick={() => {
                 setStatus(undefined)
                 setEndpointId(null)
+                setRange(null)
                 setPage(0)
               }}
             >

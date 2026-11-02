@@ -111,8 +111,8 @@ Ant Design + React Query + Zustand + Recharts。五个页面都读前面那组�
 
 | 页面 | 数据来源 | 凭证 |
 |---|---|---|
-| 事件流（2 秒轮询） | `GET /v1/events` | 租户 API Key |
-| 投递（筛选 + 重放死信） | `GET /v1/deliveries` + `POST …/replay` | 租户 API Key |
+| 事件流（2 秒轮询，按类型 / 时间范围筛选） | `GET /v1/events` | 租户 API Key |
+| 投递（按状态 / Endpoint / 时间范围筛选 + 重放死信） | `GET /v1/deliveries` + `POST …/replay` | 租户 API Key |
 | Endpoints（新建 / 暂停 / 恢复） | `/v1/endpoints` | 租户 API Key（写操作要 `endpoint:write`） |
 | 租户（创建 / 统计 / 改策略 / Key 轮换） | `/v1/admin/tenants*`、`/tenants/{id}/keys` | Bootstrap Token |
 | 系统监控（吞吐折线 + 耗时分布 + 百分位） | `/v1/admin/overview`、`/metrics/timeseries`、`/metrics/latency` | Bootstrap Token |

@@ -80,6 +80,11 @@ src/
 直接 `new Date` 会按本地时间解析，在 Asia/Shanghai 下每行时间都偏 8 小时。这类 bug 通常
 被算在服务端头上。
 
+**出站的时间范围反过来也要转。** 事件流和投递页的时间范围选择器（`components/TimeRangeFilter.tsx`）
+按浏览器本地时间选，但 `GET /v1/events` / `GET /v1/deliveries` 的 `from`/`to` 是无时区的 UTC 字符串，
+所以出站走 `toApiTimestamp`：同一瞬间换成 UTC 墙钟、秒精度；`to` 在后端是不含的。`dayjs` 只作为类型
+引用（它是 AntD 自带的日期库），没有新增运行时依赖。
+
 **Tailwind 关掉了 preflight。** Ant Design v5 自带 reset，叠加 Tailwind 的 preflight 会把
 按钮内边距和表格边框重置成一堆难查的状态。这里 Tailwind 只负责布局 utility。
 
@@ -91,7 +96,7 @@ Vite 的转换管线，不用再配 babel/ts-jest 一套独立编译。`npm test
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint（含 react-hooks 规则）
-npm test             # 76 个用例
+npm test             # 87 个用例
 npm run test:coverage
 ```
 

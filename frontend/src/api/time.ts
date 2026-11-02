@@ -14,6 +14,19 @@ export function parseTimestamp(value: string): Date {
   return new Date(HAS_TIMEZONE.test(value) ? value : `${value}Z`)
 }
 
+/**
+ * The other direction: a `Date` (what a picker hands back) to the `from` / `to` value
+ * the list endpoints take.
+ *
+ * The backend parses those as naive date-times and reads them as UTC, so the string has
+ * to be the UTC wall clock — sending the viewer's local time would shift the window by
+ * their offset, the mirror image of the bug `parseTimestamp` exists for. Seconds are
+ * enough: the columns store milliseconds, but nobody picks a window to the millisecond.
+ */
+export function toApiTimestamp(date: Date): string {
+  return date.toISOString().slice(0, 19)
+}
+
 /** `2026-10-29 16:31:02` — local time, seconds precision. Never `Invalid Date`. */
 export function formatTimestamp(value: string | null | undefined): string {
   if (value === null || value === undefined || value === '') {

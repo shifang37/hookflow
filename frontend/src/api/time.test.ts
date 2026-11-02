@@ -7,7 +7,21 @@ import {
   formatPercent,
   formatTimestamp,
   parseTimestamp,
+  toApiTimestamp,
 } from './time'
+
+describe('toApiTimestamp', () => {
+  it('sends the UTC wall clock, never the viewer\'s local time', () => {
+    // 23:30 UTC is already the next day in Asia/Shanghai. The API reads a naive value as
+    // UTC, so a local-time string would filter a window eight hours away from the one
+    // the operator picked — the mirror image of the `parseTimestamp` bug.
+    expect(toApiTimestamp(new Date('2026-10-29T23:30:00Z'))).toBe('2026-10-29T23:30:00')
+  })
+
+  it('drops the milliseconds and the zone suffix the API does not take', () => {
+    expect(toApiTimestamp(new Date('2026-10-29T08:31:02.114Z'))).toBe('2026-10-29T08:31:02')
+  })
+})
 
 describe('parseTimestamp', () => {
   it('treats an offset-less backend timestamp as UTC', () => {

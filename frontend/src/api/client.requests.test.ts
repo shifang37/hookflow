@@ -59,15 +59,31 @@ describe('api request functions', () => {
     const cases: Array<{ name: string; call: () => Promise<unknown>; method: string; uri: string }> = [
       {
         name: 'listEvents',
-        call: () => api.listEvents({ eventType: 'order.paid', page: 0, size: 20 }),
+        call: () =>
+          api.listEvents({
+            eventType: 'order.paid',
+            from: '2026-10-29T00:00:00',
+            to: '2026-10-30T00:00:00',
+            page: 0,
+            size: 20,
+          }),
         method: 'GET',
-        uri: '/v1/events?eventType=order.paid&page=0&size=20',
+        // axios leaves `:` unencoded, so the window reads the same here as in the API docs.
+        uri: '/v1/events?eventType=order.paid&from=2026-10-29T00:00:00&to=2026-10-30T00:00:00&page=0&size=20',
       },
       {
         name: 'listDeliveries',
-        call: () => api.listDeliveries({ status: 'DEAD', endpointId: 2, page: 1, size: 20 }),
+        call: () =>
+          api.listDeliveries({
+            status: 'DEAD',
+            endpointId: 2,
+            from: '2026-10-29T00:00:00',
+            to: '2026-10-30T00:00:00',
+            page: 1,
+            size: 20,
+          }),
         method: 'GET',
-        uri: '/v1/deliveries?status=DEAD&endpointId=2&page=1&size=20',
+        uri: '/v1/deliveries?status=DEAD&endpointId=2&from=2026-10-29T00:00:00&to=2026-10-30T00:00:00&page=1&size=20',
       },
       {
         name: 'getDelivery',
@@ -212,8 +228,8 @@ describe('api request functions', () => {
     // present key with an undefined value. axios is what drops it; this is the assertion
     // that would fail if the API layer ever started sending `params: { ...query, status:
     // query.status ?? '' }` instead.
-    await api.listEvents({ eventType: undefined, page: 0 })
-    await api.listDeliveries({ status: undefined, eventId: undefined })
+    await api.listEvents({ eventType: undefined, from: undefined, to: undefined, page: 0 })
+    await api.listDeliveries({ status: undefined, eventId: undefined, from: undefined, to: undefined })
 
     expect(calls[0]?.uri).toBe('/v1/events?page=0')
     expect(calls[1]?.uri).toBe('/v1/deliveries')

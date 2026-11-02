@@ -21,6 +21,7 @@ import {
   useDeliveryDetail,
   useReplayDelivery,
 } from '@/api/queries'
+import { toApiTimestamp } from '@/api/time'
 import { DeliveriesPage } from './DeliveriesPage'
 
 const mockedUseDeliveries = vi.mocked(useDeliveries)
@@ -208,5 +209,38 @@ describe('DeliveriesPage', () => {
     // The batch endpoint's answer is a partial result; a silent "done" would hide the
     // rejected id, which is the one the operator has to act on.
     expect(await screen.findByText(/1 条被拒绝/)).toBeInTheDocument()
+  })
+
+  it('filters by a time window in UTC and drops it with the other filters', () => {
+    withDeliveries([delivery()])
+
+    renderWithProviders(<DeliveriesPage />)
+
+    // Focus is explicit: jsdom does not move it on a mouse event, and the picker only
+    // treats Enter as a submit while its input is focused.
+    const start = screen.getByPlaceholderText('开始时间')
+    const end = screen.getByPlaceholderText('结束时间')
+    fireEvent.mouseDown(start)
+    fireEvent.focus(start)
+    fireEvent.change(start, { target: { value: '2026-10-29 00:00:00' } })
+    fireEvent.keyDown(start, { key: 'Enter', code: 'Enter', keyCode: 13 })
+    fireEvent.change(end, { target: { value: '2026-10-30 00:00:00' } })
+    fireEvent.keyDown(end, { key: 'Enter', code: 'Enter', keyCode: 13 })
+
+    const lastQuery = () => {
+      const calls = mockedUseDeliveries.mock.calls
+      return calls[calls.length - 1]?.[0]
+    }
+    expect(lastQuery()).toMatchObject({
+      from: toApiTimestamp(new Date(2026, 9, 29, 0, 0, 0)),
+      to: toApiTimestamp(new Date(2026, 9, 30, 0, 0, 0)),
+      page: 0,
+    })
+
+    // A window is a filter like the others: the one "clear" button must drop it too, or
+    // the table keeps showing a slice while the controls say nothing is applied.
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选' }))
+    expect(lastQuery()?.from).toBeUndefined()
+    expect(lastQuery()?.to).toBeUndefined()
   })
 })

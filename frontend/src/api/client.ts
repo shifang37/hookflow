@@ -136,6 +136,9 @@ async function request<T>(scope: Scope, config: AxiosRequestConfig): Promise<T> 
 
 export interface EventQuery {
   eventType?: string | undefined
+  /** Naive UTC date-times (`2026-10-29T08:31:02`); `from` inclusive, `to` exclusive. */
+  from?: string | undefined
+  to?: string | undefined
   page?: number
   size?: number
 }
@@ -144,6 +147,9 @@ export interface DeliveryQuery {
   eventId?: number | undefined
   endpointId?: number | undefined
   status?: DeliveryStatus | undefined
+  /** Same window semantics as {@link EventQuery}: `from` inclusive, `to` exclusive, UTC. */
+  from?: string | undefined
+  to?: string | undefined
   page?: number
   size?: number
 }
