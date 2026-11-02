@@ -281,7 +281,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 
 ### I. 一些小的历史遗留
 
-- `AdminController` 里注入了 `ApiKeyMapper apiKeyMapper` 但从未使用（加 `ApiKeyQueryMapper` 之前就在）。
+- ~~`AdminController` 里注入了 `ApiKeyMapper apiKeyMapper` 但从未使用（加 `ApiKeyQueryMapper` 之前就在）。~~ 已移除（2026-11-02）。
 - `EventController.getEvent` 的 `deliveryCount = 0` 是占位（见 B）。
 - 内置的 `/demo/` 控制台（`static/demo/`）和新的 `/ui/` 控制台并存，是两套东西：前者是单机自动演示，后者是运营工具。
 

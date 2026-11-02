@@ -5,7 +5,6 @@ import dev.hookflow.api.dto.Dtos.ProvisionTenantResponse;
 import dev.hookflow.common.auth.BootstrapTokenGuard;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
-import dev.hookflow.persistence.ApiKeyMapper;
 import dev.hookflow.persistence.TenantMapper;
 import dev.hookflow.service.ApiKeyService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -38,16 +37,13 @@ public class AdminController {
     private static final String DEFAULT_SCOPES = "event:write,endpoint:write,delivery:read";
 
     private final TenantMapper tenantMapper;
-    private final ApiKeyMapper apiKeyMapper;
     private final ApiKeyService apiKeyService;
     private final BootstrapTokenGuard bootstrapTokenGuard;
 
     public AdminController(TenantMapper tenantMapper,
-                           ApiKeyMapper apiKeyMapper,
                            ApiKeyService apiKeyService,
                            BootstrapTokenGuard bootstrapTokenGuard) {
         this.tenantMapper = tenantMapper;
-        this.apiKeyMapper = apiKeyMapper;
         this.apiKeyService = apiKeyService;
         this.bootstrapTokenGuard = bootstrapTokenGuard;
     }
