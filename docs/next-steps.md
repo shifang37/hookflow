@@ -403,3 +403,6 @@ ae43506 feat: operator console - admin read API and a React UI
     §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. ~~小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。~~ 已移除（2026-11-02）；
     同一轮把 [remaining-plan.md §6](remaining-plan.md) 的 U-4（签名提示断言）与 U-5（时间范围筛选）也收掉了。
+12. ~~A3 备份恢复演练~~ —— 已完成（2026-11-03）：`scripts/backup-restore.ps1`（可重放），
+    记录与 RTO 见 [failures/0008](failures/0008-backup-restore-drill.md)，README 的故障演练一节与
+    [operations.md §10](operations.md) 的恢复后检查清单同步更新。恢复后服务在**无 broker 消息**的前提下自愈。

@@ -416,10 +416,13 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 故障演练（真实进程，真实依赖故障）
 
 `./scripts/drill.ps1` 把三个角色作为独立 JVM 启动，然后真的杀进程、真的停容器。完整记录在 `docs/failures/0004`–`0006`。
+`./scripts/backup-restore.ps1` 覆盖唯一会真的丢数据的场景——MySQL 主库：`mysqldump` → 恢复到**空的** `mysql:8.4` → 逐表断言 →
+清空 broker 队列 → 三角色指向恢复实例自愈，记录在 [`docs/failures/0008`](docs/failures/0008-backup-restore-drill.md)。
 
 ```bash
 docker compose up -d            # 若 3306 被占用：DB_PUBLISH_PORT=13306 docker compose up -d
-./scripts/drill.ps1 -DbPort 13306      # 约 3 分钟
+./scripts/drill.ps1 -DbPort 13306            # D1–D3，约 3 分钟
+./scripts/backup-restore.ps1 -DbPort 13306   # A3 备份恢复，约 1 分钟
 ```
 
 | 演练 | 动作 | 实测结果 |
@@ -427,6 +430,7 @@ docker compose up -d            # 若 3306 被占用：DB_PUBLISH_PORT=13306 doc
 | **D1** | `kill -9` relay，期间提交 5 个事件 | 5 行停在 outbox；重启后 **4 秒**追平；5 个事件全部 `attemptCount=1` |
 | **D2** | `kill -9` worker（请求进行中） | attempt 1 → `ABANDONED / LEASE_EXPIRED`，attempt 2 → `SUCCEEDED`；**11 秒**收敛；编号连续无重复 |
 | **D3** | 停 Redis、暂停 RabbitMQ | 事件均被接受；工作停在 outbox；恢复后 **2 秒**追平，无额外尝试 |
+| **A3** | 带着 1 条在途、3 条消息已发出、5 条未发布的投递 `mysqldump`；恢复到空实例；把 broker 队列清到 `ready=0 unacked=0` 再起角色 | 14/14 断言逐项相等；空实例到可用 **28 秒**；9 条在途投递 **5 秒**内全部 `SUCCEEDED`，丢消息的 3 条 `attempts=1`，无人工介入 |
 
 自动化测试与演练的分工写在 [ADR-0008](docs/adr/0008-fault-injection-tooling.md)：精密的时间窗口由确定性测试覆盖，进程崩溃的运行时行为由演练覆盖。**两者不能互相替代。**
 
@@ -633,7 +637,7 @@ deploy/kind/
 
 docs/
 ├── adr/             14 条架构决策（含 0009/0010/0011/0012/0013/0014）
-├── failures/        真实缺陷复盘与演练记录（含 0007）
+├── failures/        真实缺陷复盘与演练记录（含 0007、0008）
 ├── perf/            压测原始输出（报告引用的唯一来源）
 ├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么
 ├── performance.md   性能报告：方法、数据、瓶颈、优化前后对比
@@ -644,6 +648,7 @@ docs/
 scripts/
 ├── bench.ps1        压测入口（GC 日志 + JFR + 指标 + 清库 + 下游采样/语句摘要）
 ├── drill.ps1        故障演练（真杀进程）
+├── backup-restore.ps1  备份恢复演练（mysqldump → 空实例 → 14 项断言 → 清空 broker 后自愈）
 └── demo.ps1 / demo.sh  一键演示
 ```
 

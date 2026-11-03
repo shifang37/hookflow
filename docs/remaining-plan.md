@@ -15,6 +15,9 @@
 > `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`。
 > **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
 > 下一步是 **U（控制台小缺口）**。
+> **A3 备份恢复演练也已完成**（2026-11-03）：`scripts/backup-restore.ps1` 把 `mysqldump --single-transaction` 的备份恢复到
+> 一台空 `mysql:8.4`，断言行数与状态分布全等，并在清空 broker 队列的前提下靠三条恢复路径让全部在途投递收敛；
+> 记录见 [failures/0008](failures/0008-backup-restore-drill.md)，运维检查清单见 [operations.md §10](operations.md)。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 

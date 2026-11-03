@@ -44,9 +44,9 @@ v0.2 的建议是"先加 worker"，那是基于"接收方延迟是主要瓶颈"�
 | **RabbitMQ 不可用** | **正常接收事件**（只是 outbox 堆积） | publish 失败 → `releaseBack` → 行回到 `NEW`，下轮重试 | 消费停止，无消息可消费 | relay 自动追上；积压 drains，投递延迟上升但不丢 |
 | **Redis 不可用** | `fail-open: true` → 放行；`false` → 503 | 无影响 | 无影响 | 自动恢复 |
 | **worker 全部挂掉** | 正常 | outbox 会堆积（消息发出去但没人消费） | — | 起 worker 后立即消费积压 |
-| **磁盘/MySQL 只读** | 500 | 停止 | 停止 | 需人工介入 |
+| **磁盘/MySQL 只读** | 500 | 停止 | 停止 | 需人工介入（恢复流程与检查清单见 §10） |
 
-**关键运维结论**：RabbitMQ 和 Redis 都不是关键路径。只有 MySQL 是关键路径。这意味着容量规划和备份的重点应该压在 MySQL 上。
+**关键运维结论**：RabbitMQ 和 Redis 都不是关键路径。只有 MySQL 是关键路径。这意味着容量规划和备份的重点应该压在 MySQL 上；备份与恢复流程、恢复后的检查清单见 §10。
 
 ## 3. 观测什么
 
@@ -270,3 +270,46 @@ failed size validation: 2840 != 27969: failed precondition
 ### 关闭 tracing 的影响
 
 `management.tracing.enabled=false` 时 `TraceContextSupport` 全部退化为 no-op：不建 span、`DeliveryMessage.traceparent` 为 null、响应里没有 `X-HookFlow-Trace-Id`。**投递语义不变**。
+
+## 10. 备份与恢复
+
+§2 的结论是"只有 MySQL 是关键路径"，它的另一面是**只需要备份 MySQL**：RabbitMQ 里的消息、Redis 里的计数都可以丢，
+丢了之后由 worker 角色里的 `DeliveryRecovery` 从数据库状态重建。这一节的每一句都被 [failures/0008](failures/0008-backup-restore-drill.md)
+的演练验证过；可重放命令是 `./scripts/backup-restore.ps1 -DbPort 13306`。
+
+### 备份
+
+```bash
+# 热备：--single-transaction 对 InnoDB 给出一致快照，不锁表，业务可以继续写；
+# --no-tablespaces 让备份账号不需要 PROCESS 权限。
+mysqldump --single-transaction --no-tablespaces -uroot hookflow > hookflow-$(date +%F).sql
+```
+
+按**整个库**导出，不要挑表：`flyway_schema_history` 必须在备份里。缺了它，应用启动时 Flyway 会把恢复出来的表
+当成"没迁移过的非空库"而拒绝启动（默认不 baseline）。
+
+### 恢复到一台空实例
+
+1. 起一台**空的** MySQL：同一大版本、`TZ=UTC`、同样的库名与账号，例如
+   `docker run -d --name hookflow-mysql-restore -e MYSQL_ROOT_PASSWORD=… -e MYSQL_DATABASE=hookflow -e MYSQL_USER=hookflow -e MYSQL_PASSWORD=… -e TZ=UTC -p 13307:3306 mysql:8.4`
+2. 导入：`mysql -uroot hookflow < hookflow-<日期>.sql`
+3. 把三个角色的 `DB_HOST` / `DB_PORT` 指到新实例，**先起 relay 与 worker 让在途工作收敛，再放客户流量**（见下面第 2 条）
+
+### 恢复后必须检查的 3 件事
+
+1. **数据与备份一致，而不只是"能连上"。** 对源与恢复实例跑同一组 SQL：8 张业务表加 `flyway_schema_history` 的 `COUNT(*)`，
+   以及 `delivery` / `outbox` / `delivery_attempt` 按 `status` 分组的分布，逐项相等；`flyway_schema_history` 里不能有 `success = 0`。
+   演练脚本把这组对比做成了 14 项自动断言，任何一项不等就直接失败，不进入下一步。
+2. **在途工作自己收敛了，再对外宣布"已恢复"。** 备份时刻一定有在途的投递，而它们的消息（如果曾经发出过）在新 broker 里不存在。
+   在恢复实例上起 worker 之后看三类行归零：`DELIVERING` 且 `lease_until < NOW(3)`（租约回收：attempt 记为 `ABANDONED`，重新入队）、
+   `PENDING` 且 `updated_at` 早于 `hookflow.relay.stale-publishing-seconds`（滞留重入队：outbox 里旧的 `PUBLISHED` 行被重新置为 `NEW`）、
+   `outbox` 里 `status <> 'PUBLISHED'`（relay 排空）。对应指标是 `hookflow_recovery_lease_reclaimed`、`hookflow_recovery_stuck_requeued`
+   和 `hookflow_outbox_backlog`。**不需要**手工处理 DLQ 或逐条重放——这就是 §2 那句"DLQ 里的消息不需要手工处理"的含义。
+3. **新实例满足 §5 的时钟前提，且应用拿的是同一把 `HOOKFLOW_MASTER_KEY`。** `SELECT @@system_time_zone` 必须是 `UTC`
+   （`time_zone = SYSTEM` 时以它为准），否则所有退避与租约比较都会偏移；master key 不在备份里，换了它，
+   `endpoint.secret_cipher` 一个都解不开，投递会在签名那一步全部失败。
+
+### 这次演练没有覆盖的
+
+MySQL 不可用**期间**的接收行为（预期 500，见 §2）、主从或半同步复制、跨机器恢复（演练在同一台机器上起第二个容器，
+网络与磁盘都是本机的）。

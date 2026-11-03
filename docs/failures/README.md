@@ -28,8 +28,9 @@
 | [0004](0004-drill-d1-relay-kill.md) | D1 relay 被 `kill -9` | 5 个事件停在 outbox，重启后 4s 追平，全部 `attemptCount=1` | 通过 |
 | [0005](0005-drill-d2-worker-kill.md) | D2 worker 请求中途被 `kill -9` | attempt 1 `ABANDONED/LEASE_EXPIRED`，attempt 2 成功，11s 收敛 | 通过 |
 | [0006](0006-drill-d3-dependency-outage.md) | D3 停 Redis / 暂停 RabbitMQ | 事件均被接受，工作停在 outbox，恢复后自动追平 | 通过 |
+| [0008](0008-backup-restore-drill.md) | A3 `mysqldump` → 恢复到空 `mysql:8.4` → 清空 broker 队列后自愈 | 14/14 断言逐项相等，空实例到可用 28 s，9 条在途投递 5 s 内全部 `SUCCEEDED`，丢消息的 3 条 `attempts=1` | 通过 |
 
-复现全部演练：`./scripts/drill.ps1 -DbPort 13306`（约 3 分钟）。
+复现全部演练：`./scripts/drill.ps1 -DbPort 13306`（D1–D3，约 3 分钟）、`./scripts/backup-restore.ps1 -DbPort 13306`（A3，约 1 分钟）。
 
 ## 三条缺陷的共同点
 
