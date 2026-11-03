@@ -584,11 +584,11 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 |---|---|---|
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
-| v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；未开始：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流 | 进行中（[计划与 backlog](docs/v0.4-plan.md)） |
+| v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)；没有单独打 tag，随 v0.4.0 发布） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；吞吐 41 → 455–470 events/s ✅（B0–B8，[performance.md](docs/performance.md)）；运营控制台 `/ui/` ✅（[`frontend/`](frontend/README.md)，87 个测试）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；CI/CD 发布链 ✅（GHCR 镜像、Helm OCI 已验证）。未开始、转入后续版本：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流、Python SDK | ✅ 已发布：tag `v0.4.0`（2026-11-03，[CHANGELOG](CHANGELOG.md)） |
 
-**后续工作与优化计划**（含缺口清单、验收标准、预估工作量、环境坑汇总）：[docs/v0.4-plan.md](docs/v0.4-plan.md)。
-这份文档是给「下一个接手的人」看的，能独立读——包含当前基线、P1/P2/P3 任务、以及明确不做什么。
+**后续工作与优化计划**：[docs/remaining-plan.md](docs/remaining-plan.md)（任务拆解与验收标准，顺序 P → H）与 [docs/next-steps.md](docs/next-steps.md)（当前基线与环境坑）。
+两份都是给「下一个接手的人」看的，能独立读；[docs/v0.4-plan.md](docs/v0.4-plan.md) 保留 v0.4 的 backlog 原文，其基线数字已过期。
 
 ---
 

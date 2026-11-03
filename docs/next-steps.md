@@ -23,9 +23,9 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **164 个通过** | `./mvnw -o test` |
+| 后端单测 | **174 个通过** | `./mvnw -o test` |
 | 后端单测覆盖率 | **LINE 26.1%**（728/2786）、BRANCH 25.4%，仅单测；IT 不采集 | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
-| 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
+| 后端集成测试 | **71 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
 | 前端单测 | **87 个通过**（16 个文件），~46s | `cd frontend && npm test` |
 | 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径，比 3.x 更严格） | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |

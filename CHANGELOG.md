@@ -5,7 +5,16 @@
 
 ## [Unreleased]
 
-主题：**能点的演示**。一个模拟业务系统 + 一块面板，把 v0.3 讲的那些性质变成看得见的东西。
+## [0.4.0] — 2026-11-03
+
+主题：**从「能讲」到「能运维」**。v0.3 用测量证明了平台的性质，这一版把它变成能点、能看、能部署、能接入的东西：
+一个打进 jar 的演示控制台、一个独立前端工程的运营控制台、Java SDK、Helm chart、Prometheus + Grafana 监控、
+完整的 CI/CD 发布链；同时把**持续投递吞吐从 41 events/s 抬到 455–470 events/s**。
+
+> **版本号说明**：`v0.3.0` 之后 `pom.xml` 一直停在 `0.3.1-SNAPSHOT`，README 把演示控制台记作「v0.3.1」，
+> 但从未打过这个 tag，而 README 与 docs 早已按 v0.4 描述。本版把 pom、CHANGELOG 和 git tag 对齐到 **0.4.0**：
+> `v0.3.0` 之后的全部改动（含演示控制台）都属于 0.4.0。`docker.yml` 会把 `v0.4.0` tag 发布为
+> `ghcr.io/shifang37/hookflow:v0.4.0`。
 
 ### 新增 — 演示控制台（`/demo/`）
 
@@ -42,13 +51,99 @@
 - `scripts/bench.ps1` / `tools/LoadGen` 支持 `-BatchSize`（`--batch-size`），`--rate` 始终是 events/s，
   用于单条 vs 批量的同机对照
 
+### 新增 — 吞吐：41 → 455–470 events/s（B0–B8，[performance.md §15–§23](docs/performance.md)）
+
+- **B0 再基线**：A2 之后重新量下游，发现平台**持续投递**只有 **41 events/s**——v0.3 的「300–350/s」是入口接受速率，
+  不是送达速率；瓶颈在 relay 的逐条 publish + 逐条 confirm。[capacity.md](docs/capacity.md) 据此整体改写
+- **B3 语句摘要**：`scripts/bench.ps1 -StatementDigest` 用 MySQL `performance_schema` 把一次事务拆到语句级：批量入口下
+  一次 ingest 事务约 14.5ms，三条多行插入合计只占约 1.9ms，其余是那次提交
+- **B4 relay 批量发布**（[ADR-0014](docs/adr/0014-batched-relay-publish.md)）：一批先全部发送、再一起等 confirm，
+  确认过的行一条 UPDATE 标记，未确认的一律放回 `NEW`；`hookflow.relay.batch-size` 可配。relay 发布 **41 → 400–466/s**。
+  崩溃重复窗口的粒度因此从一行变成一批，语义见 [delivery-semantics.md](docs/delivery-semantics.md)
+- **B5 worker 并发 8 → 16**：持续吞吐 **152 → 264 events/s（+74%）**；`MQ_CONCURRENCY` / `MQ_PREFETCH` / 连接池三个旋钮一起量
+- **B6 负结果（已回退）**：worker 的 settle 批量提交，提交 −36% 但吞吐 −25%——固定并发下 worker 是延迟受限的，
+  杠杆是并发不是提交次数（[§20](docs/performance.md)）
+- **B7 + B8 新默认值**：worker 32 并发 + 连接池 32 + relay batch 100。450 入口下持续投递 **264 → 455–470 events/s**；
+  900 入口下 worker 先满（382–421/s），relay 还能发 449–731/s（[§21–§22](docs/performance.md)）
+- **V4 索引 A/B**（[§23](docs/performance.md)）：`idx_delivery_updated_status` 让图表查询 **316 → 132ms（2.4×）**，
+  代价是 settle −10%、insert −7%
+
+### 新增 — 运营控制台（`/ui/`，源码在 [`frontend/`](frontend/README.md)）
+
+- **独立前端工程**：React 18 + TypeScript + Vite + Ant Design + React Query，五个页面（事件流、投递、Endpoints、租户、系统监控）
+  全部接真实接口；`npm run build:backend` 把产物写进 `src/main/resources/static/ui/`（gitignored），后端从 `/ui/` 提供，
+  `UiForwardController` 把客户端路由兜到 `index.html`。两个凭证对应两个信任域：租户 API Key 走 `/v1/**`，运营令牌走 `/v1/admin/**`
+- **控制台读接口**（`AdminConsoleController` / `ReportService` / `ReportMapper`，口径表在 [api.md](docs/api.md)）：
+  租户列表/详情/统计、平台概览、时间序列、延迟分布、API Key 元数据列表（SQL 里不出现 `key_hash`）；
+  `PATCH /v1/admin/tenants/{id}` 改限流/权重/并发预算，并支持 `status: SUSPENDED / ACTIVE`——停用是生命周期不是删除，
+  Key、Endpoint 与投递历史全部保留，新事件 `403`；迁移 `V4` 加 `idx_delivery_updated_status`
+- **Endpoint 软删除** `DELETE /v1/endpoints/{id}` → `204`：待投递的 `PENDING`/`RETRY_WAIT` 立刻 `CANCELED`，迟到的消息记
+  `ENDPOINT_DELETED`；行保留（投递历史的外键），但 `GET`/`pause`/`resume`/列表/fan-out 一律看不到它。迁移 `V5` 用
+  STORED 生成列 `url_key` 做「只约束活着的行」的唯一键，所以同一个 URL 删掉后可以立刻重建
+- **事件详情与批量重放**：`GET /v1/events/{id}`（payload + 扇出投递）、`POST /v1/deliveries/replay`（最多 100 条，
+  逐条独立事务，HTTP 永远 200，结果逐条返回）
+- **同步端点探测** `POST /v1/endpoints/{id}/test`：用 endpoint 已保存的密钥发一条合成 webhook，不写 event/delivery/attempt；
+  每 endpoint 每秒一次，超限 `429`
+- 控制台页面：投递 attempt 历史抽屉、租户停用/启用、Endpoint 测试发送、事件流与投递页按时间范围筛选
+  （`from`/`to`，UTC，`to` 为开区间）、390px 视口可用
+- 前端测试 **87 个**（16 个文件），`tsc --noEmit` + eslint 进 CI；覆盖率语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%（Vitest 4 口径）
+- 新增错误码 `40904 ALREADY_EXISTS`
+
+### 新增 — Java SDK（[`sdk/java/`](sdk/java/README.md)）
+
+- 独立 Maven 项目 `dev.hookflow:hookflow-java-sdk:0.1.0`，**Java 17+**，OkHttp 4.12 + Jackson 2.17（不是服务端的 Jackson 3）
+- 单条 / 批量发送事件；客户端生成 `Idempotency-Key` 且**重试复用同一个 key**；重试是手写循环（不用 Failsafe，理由见
+  [remaining-plan.md §J.2](docs/remaining-plan.md)）
+- 接收方验签工具：时间戳窗口 + 常量时间比较；签名串与服务端 `HmacSigner` 逐字对齐，**顺手修正了文档里写错的签名串格式**
+- 66 个测试（JUnit 5 + MockWebServer），JaCoCo LINE 92.9%，`LINE >= 80%` 门槛 `haltOnFailure`；`sdk.yml` 在 `sdk/java/**` 变更时跑
+- 发布 workflow `sdk-publish.yml`（tag `sdk-v*` → GitHub Packages）已写好，**尚未实际发布**；当前只能 `mvn install` 后本地引用
+
+### 新增 — 监控（[monitoring.md](docs/monitoring.md)）
+
+- compose profile `monitoring` 起 Prometheus + Grafana，自动加载 **3 个面板**（概览、投递、JVM）与 **2 条告警规则**
+  （`monitoring/alerts/hookflow.yml`），告警实测触发
+- 补了两个指标缺口：`hookflow.delivery.attempted`（计数）与 `hookflow.delivery.duration`（Timer，投递耗时分位数），
+  `DeliveryProcessorMetricsTest` 覆盖
+- 明确不是生产监控方案：没有 Alertmanager、远程存储和鉴权边界
+
+### 新增 — Helm chart（[`helm/hookflow/`](helm/hookflow/README.md)）
+
+- 同一个镜像跑成 api / relay / worker 三种角色，只有 api 有 Service/Ingress；MySQL / RabbitMQ / Redis **不在 chart 里**，
+  `config.*` 指向外部地址
+- `values-dev.yaml` / `values-prod.yaml`，readiness / liveness 接 actuator，HPA 可选（需要 metrics-server）；要求 Kubernetes 1.28+
+- kind 上实测：三角色 Ready、滚动更新、杀 worker、HPA；`helm.yml` 在 `helm/**` 变更时 lint + template
+- `helm-publish.yml`：tag `helm-v*` → `oci://ghcr.io/shifang37/charts`，`helm-v0.1.0` 已发布且可匿名拉取
+
+### 新增 — CI/CD（README「CI/CD」一节）
+
+- `ci.yml`：单测 → `-Pcoverage` 的 JaCoCo → `verify`（Testcontainers IT）→ package，外加前端 job（typecheck / lint / test:coverage / build）；
+  Codecov 步骤没有 token 时跳过并打印原因；失败时把测试报告打进日志
+- `docker.yml`：push `master` → `ghcr.io/shifang37/hookflow:latest` + `:sha-<短>`；tag `v*` → `:v0.4.0`；先 `npm ci && npm run build:backend`
+  再 buildx（Dockerfile 不跑 npm）。**run #1 已验证**镜像推送成功
+- `helm.yml` / `helm-publish.yml` / `sdk.yml` / `sdk-publish.yml`；`python-sdk.yml` 预置（`sdk/python/` 出现后自动生效）
+- 三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`
+- README 换成实时徽章；Vitest 3.2.7 → **4.1.12**，修掉 CI 上 `onTaskUpdate` 超时导致的 exit 1
+
 ### 变更
 
+- **默认值**（都来自实测，见上文 B7/B8）：`hookflow.relay.batch-size` **100**、worker 并发 `MQ_CONCURRENCY` **32**、连接池 **32**
 - `all`（本地演示）profile 增加演示用的取值：租户水位线 200、读超时 3s、退避基数 0.8s。
   **这些不是生产建议值**，生产默认值未变
 - 演示截图：[demo-console.png](docs/demo-console.png)、[demo-console-retries.png](docs/demo-console-retries.png)
   （headless Chrome 真实渲染）
-- 测试 101 → **132**（96 单元 + 36 集成）
+- `docs/capacity.md` 按 B0–B8 整体改写（v0.3 的 300–350/s 是入口数字，不是送达数字）；新增 ADR-0013（批量摄入）、
+  ADR-0014（批量发布）；交接文档 `docs/remaining-plan.md` + `docs/next-steps.md` 为权威，`docs/v0.4-plan.md` 只保留 backlog
+- 测试：96（v0.3.0）→ 后端 **245**（174 单元 + 71 集成）+ 前端 **87** + Java SDK **66**
+
+### 未完成 / 已知（不掩饰）
+
+- **Python SDK** 未开始（`sdk/python/` 不存在，只有 workflow 预置）；Java SDK 未发布到任何远程仓库
+- **A3 备份恢复演练**未做（唯一没覆盖的数据丢失场景）；**4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流**未开始
+- P3 的 2000 events/s 目标未达：当前 455–470 events/s，下一个瓶颈是 worker 的两次提交（[§20](docs/performance.md)）
+- Codecov 上传未验证（没有 `CODECOV_TOKEN`）；后端单测覆盖率有数字（LINE 28.3%，IT 不计）但没有门槛
+- 三个已知的 IT flake 根因未修（`ReadApiIT.latencyHistogramIsComplete` 两条 SQL 不是同一快照、`BatchReplayIT.cleanUp`
+  清理时后台仍在写、`ReadApiIT.setUp` 死锁），CI 靠 rerun
+- 控制台没有登录与 RBAC（只有运营令牌 + 租户 Key）；`/demo/` 无鉴权且前端没有自动化测试，只应在本地 `all` profile 打开
 
 ## [0.3.0] — 2026-10-22
 
@@ -108,8 +203,6 @@
 - wrk2 与 async-profiler 两项没有跑成：本机没有二进制、镜像拉取失败。用自研开环压测器与 JFR 采样替代，**没有对拍**
 - Jaeger UI 未人工验证：所有 `jaegertracing/all-in-one` tag 在本机 `docker pull` 都失败（`failed size validation`），链路连通性由 `TracingIT` 的断言证明
 - 令牌桶限流、SSRF DNS rebinding、`delivery_attempt` 保留策略、`stale-publishing-seconds` 拆分：仍留待后续
-
-## [Unreleased]
 
 ## [0.2.0] — 2026-10-22
 

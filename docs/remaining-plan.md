@@ -24,8 +24,8 @@
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **164 个通过** | `.\mvnw.cmd -o test` |
-| 后端集成测试 | **69 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
+| 后端单测 | **174 个通过** | `.\mvnw.cmd -o test` |
+| 后端集成测试 | **71 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
 | 前端单测 | **87 个通过**（16 个文件，~46s） | `cd frontend; npm test` |
 | 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径） | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
