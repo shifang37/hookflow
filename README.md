@@ -419,6 +419,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 `./scripts/drill.ps1` 把三个角色作为独立 JVM 启动，然后真的杀进程、真的停容器。完整记录在 `docs/failures/0004`–`0006`。
 `./scripts/backup-restore.ps1` 覆盖唯一会真的丢数据的场景——MySQL 主库：`mysqldump` → 恢复到**空的** `mysql:8.4` → 逐表断言 →
 清空 broker 队列 → 三角色指向恢复实例自愈，记录在 [`docs/failures/0008`](docs/failures/0008-backup-restore-drill.md)。
+演练结束会删掉自己建的 `drill-backup-*` 租户（`-KeepTenant` 可保留以便排查），开头也会扫掉被硬中断（`kill -9`、断电）留下的租户，所以重放不会在 demo 库里积累租户与在途行。
 
 ```bash
 docker compose up -d            # 若 3306 被占用：DB_PUBLISH_PORT=13306 docker compose up -d

@@ -20,6 +20,7 @@
 > 记录见 [failures/0008](failures/0008-backup-restore-drill.md)，运维检查清单见 [operations.md §10](operations.md)。
 > **A3 的第一条遗留也已关闭**（2026-11-03）：`DeliveryRecoveryIT` 用确定性重建的现场覆盖了"broker 丢消息 → `requeueStuckPending` →
 > `rearmStalePublished`"这条此前只有演练覆盖的恢复路径，IT 由 71 变为 73；设计取舍见 [failures/0008 §7](failures/0008-backup-restore-drill.md)。
+> **A3 的第二条遗留也已关闭**（2026-11-03）：`scripts/backup-restore.ps1` 现在在演练结束前删掉自己建的 `drill-backup-*` 租户（`-KeepTenant` 可保留），pre-flight 还会扫掉被硬中断留下的租户并清掉它们的孤儿消息，所以重放不再往 demo 库里积累租户与在途行。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 

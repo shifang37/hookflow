@@ -276,6 +276,7 @@ failed size validation: 2840 != 27969: failed precondition
 §2 的结论是"只有 MySQL 是关键路径"，它的另一面是**只需要备份 MySQL**：RabbitMQ 里的消息、Redis 里的计数都可以丢，
 丢了之后由 worker 角色里的 `DeliveryRecovery` 从数据库状态重建。这一节的每一句都被 [failures/0008](failures/0008-backup-restore-drill.md)
 的演练验证过；可重放命令是 `./scripts/backup-restore.ps1 -DbPort 13306`。
+演练结束会删掉自己创建的演练租户（`-KeepTenant` 可保留），所以重放不会在使用中的库里积累租户。
 
 ### 备份
 

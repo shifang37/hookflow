@@ -406,3 +406,4 @@ ae43506 feat: operator console - admin read API and a React UI
 12. ~~A3 备份恢复演练~~ —— 已完成（2026-11-03）：`scripts/backup-restore.ps1`（可重放），
     记录与 RTO 见 [failures/0008](failures/0008-backup-restore-drill.md)，README 的故障演练一节与
     [operations.md §10](operations.md) 的恢复后检查清单同步更新。恢复后服务在**无 broker 消息**的前提下自愈。
+13. ~~A3 的另一条遗留：demo 库积累演练租户~~ —— 已完成（2026-11-03）：演练结束前删掉自己建的租户，pre-flight 扫掉被硬中断留下的租户，见 [failures/0008 §7](failures/0008-backup-restore-drill.md)。D1–D3 的 `scripts/drill.ps1` 仍会留下 `drill-*` 租户，未处理。

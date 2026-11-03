@@ -17,6 +17,10 @@
 #      all three shapes with NO broker message carrying the state - proving the
 #      claim in docs/operations.md section 2 that MySQL state, not the broker,
 #      is what saves a delivery
+#   6. deletes the `drill-backup-*` tenant it created, and sweeps any tenant a
+#      killed earlier run left behind, so replaying the drill does not pile up
+#      tenants (and their frozen in-flight rows) in the demo database. Pass
+#      -KeepTenant to leave them in place for inspection instead.
 #
 # Every observation is printed with a timestamp so the output can be pasted
 # straight into docs/failures/ as the drill record. The RTO funnel printed at
@@ -33,7 +37,8 @@ param(
     [string]$ReceiverUrl = 'http://127.0.0.1:9099/hook',
     [int]$DbPort = 13306,
     [int]$RestorePort = 13307,
-    [switch]$KeepRestore
+    [switch]$KeepRestore,
+    [switch]$KeepTenant
 )
 
 $ErrorActionPreference = 'Stop'
@@ -264,6 +269,71 @@ function Submit-Event {
         -Body @{ eventType = $Type; payload = @{ amount = 42; drill = 'backup-restore' } }).eventId
 }
 
+# ---------------------------------------------------------------------------
+# Tenant cleanup: the drill removes the tenant it created
+# ---------------------------------------------------------------------------
+# Every replay used to leave one `drill-backup-*` tenant behind, frozen in the
+# shapes the drill created (PENDING and DELIVERING rows whose broker messages
+# were never settled). The next replay's setup healed those stale rows as a side
+# effect - that is where the stray "Lease expired for delivery 3872" line in the
+# 0008 record came from. These helpers delete such a tenant and everything that
+# belongs to it.
+
+function Get-DrillTenantIds {
+    # GROUP_CONCAT keeps the answer to one line, so "no tenant matches" (the
+    # normal case) is distinguishable from "the query failed": Invoke-Sql returns
+    # $null only for a failure, and an empty result set would look the same.
+    #
+    # Each id is emitted as its own pipeline object and the caller wraps the call
+    # in @(...). Do NOT `return ,$array` here: the caller's @() would then hold a
+    # single element - the array itself - and foreach would hand Remove-DrillTenant
+    # an Object[] where it wants a [long]. (Hit on the first replay of this change.)
+    $line = Get-Scalar -Container $sourceContainer -Sql "SELECT IFNULL(GROUP_CONCAT(id ORDER BY id), '') FROM hookflow.tenant WHERE name LIKE 'drill-backup-%'"
+    if ($null -eq $line) { throw 'could not list the tenants in the source database' }
+    if ("$line".Trim() -eq '') { return }
+    foreach ($part in "$line".Trim().Split(',')) { [long]$part.Trim() }
+}
+
+function Remove-DrillTenant {
+    param([long]$TenantId)
+
+    # Foreign-key order. delivery and delivery_attempt have no tenant_id of their
+    # own (the join scopes them); outbox and audit_log carry the column with no
+    # foreign key at all, so a failure midway leaves a partially deleted tenant
+    # that the next run's pre-flight sweep finishes. One round trip per tenant:
+    # ROW_COUNT() after each statement reports the row count of the statement
+    # right before it, which is the per-table evidence line the caller prints.
+    $sql = "DELETE da FROM delivery_attempt da JOIN delivery d ON d.id = da.delivery_id WHERE d.tenant_id = $TenantId;" +
+           " SELECT ROW_COUNT();" +
+           " DELETE FROM outbox WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM delivery WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM event WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM endpoint WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM api_key WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM audit_log WHERE tenant_id = $TenantId; SELECT ROW_COUNT();" +
+           " DELETE FROM tenant WHERE id = $TenantId; SELECT ROW_COUNT();"
+    $rows = Invoke-Sql -Container $sourceContainer -Sql $sql -Database 'hookflow'
+    if ($null -eq $rows -or @($rows).Count -lt 8) { return $null }
+    $n = @($rows | ForEach-Object { $t = "$_".Trim(); if ($t -eq '') { 0 } else { [int]$t } })
+    return [pscustomobject]@{
+        TenantId   = $TenantId
+        Attempts   = $n[0]
+        Outbox     = $n[1]
+        Deliveries = $n[2]
+        Events     = $n[3]
+        Endpoints  = $n[4]
+        ApiKeys    = $n[5]
+        AuditLog   = $n[6]
+        TenantRows = $n[7]
+    }
+}
+
+function Format-DrillTenantCounts {
+    param($Counts)
+    $line = 'attempts={0} outbox={1} delivery={2} event={3} endpoint={4} api_key={5} audit_log={6} tenant={7}'
+    return ($line -f $Counts.Attempts, $Counts.Outbox, $Counts.Deliveries, $Counts.Events, $Counts.Endpoints, $Counts.ApiKeys, $Counts.AuditLog, $Counts.TenantRows)
+}
+
 function Get-Delivery {
     param([long]$EventId)
     $page = Invoke-Api -Method GET -Path "/v1/deliveries?eventId=$EventId" -Headers @{ Authorization = "Bearer $script:token" }
@@ -297,6 +367,60 @@ foreach ($port in @(8080, 8081, 8082)) {
 }
 Stamp 'docker up, mysql:8.4 present, ports 8080/8081/8082 free'
 
+# ---------------------------------------------------------------------------
+# Leftover sweep: a killed run leaves its tenant frozen in the source database
+# ---------------------------------------------------------------------------
+# The drill deletes its own tenant before it exits, so the normal replay path
+# leaves nothing behind. This sweep is the safety net for a run that was killed
+# too hard to reach its cleanup, and it is also what finally clears the tenants
+# the earlier versions of this script accumulated.
+$staleTenants = @(Get-DrillTenantIds)
+if ($KeepTenant) {
+    Stamp "tenant cleanup disabled by -KeepTenant: $($staleTenants.Count) drill tenant(s) will stay in the database"
+} elseif ($staleTenants.Count -eq 0) {
+    Stamp 'no leftover drill tenants in the source database'
+} else {
+    $swept = 0
+    foreach ($staleId in $staleTenants) {
+        $gone = Remove-DrillTenant -TenantId $staleId
+        if ($null -eq $gone) {
+            Write-Host "  WARNING: could not delete leftover drill tenant $staleId; the next run will retry" -ForegroundColor Yellow
+            continue
+        }
+        if ($gone.TenantRows -gt 0) { $swept++ }
+        Stamp ("swept leftover drill tenant {0}: {1}" -f $gone.TenantId, (Format-DrillTenantCounts $gone))
+    }
+    if ($swept -gt 0) {
+        # The swept tenants' broker messages are orphans now. The worker drops a
+        # message whose delivery row is gone, so this is hygiene, not correctness
+        # - but purging keeps the freeze-point queue inventory in the record down
+        # to this run's own work.
+        #
+        # The "after" number has to be polled, not read once: rabbitmqctl reads
+        # the broker's stats database, which lags the queue by the stats emission
+        # interval (5s by default), so an immediate read still shows messages the
+        # purge already removed - a purged queue of 4 read back as 4 on
+        # 2026-11-03 until the stats caught up. A message still unacked on a
+        # killed worker's channel does survive a purge, so this can legitimately
+        # time out; the drill purges the queue again before the heal step, so
+        # warn rather than fail.
+        $queueBefore = Get-QueueStat -Queue 'hookflow.delivery'
+        [void](Invoke-Docker -Arguments @('exec', 'hookflow-rabbitmq', 'rabbitmqctl', '--quiet', 'purge_queue', 'hookflow.delivery'))
+        $emptied = Wait-Until -TimeoutSec 15 -PollMs 1000 -Condition {
+            $s = Get-QueueStat -Queue 'hookflow.delivery'
+            ($null -ne $s) -and ($s.Ready -eq 0) -and ($s.Unacked -eq 0)
+        }
+        $queueAfter = Get-QueueStat -Queue 'hookflow.delivery'
+        if (($null -ne $queueBefore) -and ($null -ne $queueAfter)) {
+            Stamp "purged orphan broker messages: ready $($queueBefore.Ready) -> $($queueAfter.Ready)"
+        }
+        if (-not $emptied) {
+            Write-Host '  WARNING: the broker queue did not read back as empty; the drill purges it again before the heal step' -ForegroundColor Yellow
+        }
+    }
+    Stamp "$swept leftover drill tenant(s) removed; the source database holds only its own tenants again"
+}
+
 # A leftover MockReceiver from a previous drill would fight for port 9099.
 Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
     Where-Object { $_.CommandLine -and $_.CommandLine.Contains('MockReceiver') } |
@@ -309,6 +433,7 @@ $backlogEvents = @()
 $lostEvents = @()
 $slowEvent = $null
 $tenantId = $null
+$tenantCleaned = $false
 $converged = $false
 
 try {
@@ -594,6 +719,25 @@ try {
     Stamp "final tenant delivery distribution: $finalDist"
 
     # -----------------------------------------------------------------------
+    # Clean up the drill tenant in the SOURCE database
+    # -----------------------------------------------------------------------
+    # Nothing above needs it any more: the frozen shapes live in the restored
+    # instance and in the dump, and every assertion has been made. Deleting the
+    # tenant is what keeps a replay from piling up `drill-backup-*` tenants in the
+    # demo database, and from handing the next replay's setup stale in-flight rows
+    # to heal as a side effect.
+    if ($KeepTenant) {
+        Stamp "tenant $tenantId kept (-KeepTenant): it stays in the source database for inspection"
+    } else {
+        $cleanup = Remove-DrillTenant -TenantId $tenantId
+        if ($null -eq $cleanup) { throw "could not delete drill tenant $tenantId from the source database" }
+        if ($cleanup.TenantRows -le 0) { throw "drill tenant $tenantId is still present after the delete" }
+        $tenantCleaned = $true
+        Stamp ("cleaned up drill tenant {0}: {1}" -f $cleanup.TenantId, (Format-DrillTenantCounts $cleanup))
+        Stamp "drill tenants left in the source database: $(@(Get-DrillTenantIds).Count)"
+    }
+
+    # -----------------------------------------------------------------------
     # RTO funnel
     # -----------------------------------------------------------------------
     $rtoRestore = $emptyWatch.Elapsed.TotalSeconds + $restoreWatch.Elapsed.TotalSeconds +
@@ -631,6 +775,22 @@ finally {
     Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
         Where-Object { $_.CommandLine -and $_.CommandLine.Contains('MockReceiver') } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # A controlled abort (a failed verification, a container that would not start)
+    # would otherwise leave the drill tenant frozen in the source database. The
+    # next run's pre-flight sweep is the real safety net - it also covers kill -9 -
+    # but cleaning up here keeps the database tidy in the common case.
+    if (($null -ne $tenantId) -and (-not $tenantCleaned)) {
+        if ($KeepTenant) {
+            Write-Host "aborted-run cleanup skipped by -KeepTenant: drill tenant $tenantId stays in the source database"
+        } else {
+            $abortCleanup = Remove-DrillTenant -TenantId $tenantId
+            if ($null -ne $abortCleanup) {
+                Write-Host ("aborted-run cleanup: drill tenant {0} removed from the source database ({1})" -f $abortCleanup.TenantId, (Format-DrillTenantCounts $abortCleanup))
+            } else {
+                Write-Host "aborted-run cleanup failed for tenant $tenantId - the next run's pre-flight sweep will remove it" -ForegroundColor Yellow
+            }
+        }
+    }
     if (-not $KeepRestore) {
         [void](Invoke-Docker -Arguments @('rm', '-f', $restoreContainer) -Quiet)
         Write-Host "restore container removed (use -KeepRestore to keep it for inspection)"
