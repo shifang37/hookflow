@@ -64,6 +64,11 @@ public abstract class AbstractIntegrationTest {
         // The lease sweeper would race tests that manipulate leases by hand; the
         // tests assert the reclaim semantics explicitly instead.
         registry.add("hookflow.lease.sweep-interval-ms", () -> 3_600_000);
+        // The same reasoning applies to the stuck-PENDING scan: it can only re-arm
+        // rows past a 60s grace window, so a background tick cannot help a test -
+        // it can only race one that backdates updated_at by hand. Recovery tests
+        // drive requeueStuckPending() explicitly instead.
+        registry.add("hookflow.retry.stuck-scan-interval-ms", () -> 3_600_000);
         // Short read timeout so a deliberately slow receiver is classified as
         // TIMEOUT quickly instead of holding the suite for 10 seconds.
         registry.add("hookflow.delivery.read-timeout-ms", () -> 1_200);

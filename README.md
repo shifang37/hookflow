@@ -348,7 +348,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 ```bash
 ./mvnw test      # 174 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 174 单元 + 71 集成 = 245 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
+./mvnw verify    # 174 单元 + 73 集成 = 247 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -375,6 +375,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | `ReceiverFaultIT` | 慢接收方 → `TIMEOUT`；连接被拒 → `CONNECT_ERROR`；故障消失后**同一个** delivery 自动成功 |
 | `BrokerOutageIT` | broker 冻结期间事件仍被接受、不产生任何 attempt、工作停在 outbox；恢复后自动追平且只尝试一次 |
 | `OutboxCrashWindowIT` | 「确认后崩溃」窗口：sweeper 重新武装 → 消息重复 → attempt 护栏吸收，接收方只看到一次尝试 |
+| `DeliveryRecoveryIT` | 「broker 丢消息」窗口：PENDING 超过宽限期 → `requeueStuckPending` 撞唯一键后把过期的 `PUBLISHED` 行重置为 `NEW` → relay 重发 → 投递成功且只有 1 次 attempt；宽限期内的行不会被重置 |
 | `FairnessIT` | 同一场景跑两遍，只改洪水租户的并发预算：受害租户 p99 **4 584ms → 190ms** |
 | `BackpressureIT` | 真实 HTTP：积压超水位 → `429` + `Retry-After`；恢复后已接受的事件全部投递成功、租户被重新放行 |
 | `TracingIT` | 接收方收到的 `traceparent` 与 API 返回的 `X-HookFlow-Trace-Id` 是**同一个 trace**（5 跳一条链路） |
@@ -397,7 +398,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 174 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（71 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 174 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
@@ -407,7 +408,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
 174 个测试的 **LINE 28.3%**（801/2831，另有 BRANCH 28.2%），报告在 `target/site/jacoco/`。
-这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 71 个 IT 覆盖的路径不计入，所以不要拿它
+这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 73 个 IT 覆盖的路径不计入，所以不要拿它
 和 SDK 的 92.9%（SDK 自己的测试）比较。
 
 三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`，各 workflow 顶部注释写了原因。

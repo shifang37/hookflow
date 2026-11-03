@@ -233,14 +233,19 @@ README 里那句"丢 broker 消息不等于丢投递"现在有了最强形式的
 |---|---|---|
 | lease 过期回收 | `EventIngestIT.expiredLeaseIsReclaimed`（mapper 级 CAS）+ [0005](0005-drill-d2-worker-kill.md) D2 | 在恢复实例上、跨实例 |
 | broker 不可用期间不丢工作 | `BrokerOutageIT`（容器 pause/unpause） | 不覆盖（那是 D3） |
-| **消息发出后丢失 → 滞留 PENDING → 重入队（`rearmStalePublished`）** | **没有**：`grep -r rearmStalePublished src/test` 为空 | **只有本演练覆盖** |
+| **消息发出后丢失 → 滞留 PENDING → 重入队（`rearmStalePublished`）** | `DeliveryRecoveryIT`（2026-11-03 补：确定性重建"outbox `PUBLISHED`、delivery `PENDING`、时间戳回拨 120 s"的现场，显式驱动 `requeueStuckPending`；另一个用例证明宽限期内不会重置） | 带真实 `purge_queue` 的端到端版本 |
 | 备份可恢复、恢复后一致 | 没有（本质上无法在单元/集成测试里做） | 14 项断言 |
 
 ## 7. 遗留
 
-- **`requeueStuckPending` → `rearmStalePublished` 没有自动化测试。** 这是三条恢复路径里唯一只靠演练覆盖的一条。
-  建议补一个 `DeliveryRecoveryIT`：提交事件 → 等 `PUBLISHED` → 直接 `purge_queue` → 把 `updated_at` 回拨到宽限之前 →
-  断言一次扫描后 outbox 行回到 `NEW`、投递最终 `SUCCEEDED`、`attemptCount=1`。
+- **`requeueStuckPending` → `rearmStalePublished` 的自动化测试——已于 2026-11-03 补上**（`DeliveryRecoveryIT`）。
+  没有按原先的草图（提交事件 → 等 `PUBLISHED` → `purge_queue` → 回拨 `updated_at`）走：集成测试里 relay 每 100 ms 跑一次，
+  "等 `PUBLISHED` 再清队列"会和 worker 抢消费。改为直接重建丢消息留下的现场——outbox 行 `PUBLISHED` 且 `published_at`
+  回拨 120 s、delivery `PENDING` 且 `updated_at` 回拨 120 s、broker 里没有消息——再显式调用 `requeueStuckPending`，断言
+  outbox 行离开过期的 `PUBLISHED`、relay 重发、投递 `SUCCEEDED` 且 `attemptCount=1`、attempt 只有 1 条、
+  `hookflow.recovery.stuck_requeued` 计数增加；第二个用例证明宽限期内的 `PUBLISHED` 行不会被重置（`append` 返回 false）。
+  测试基类同时把 `stuck-scan-interval-ms` 抬到 1 小时，和 lease sweeper 一样由测试显式驱动，避免后台扫描和手工回拨时间戳
+  的测试抢跑。带真实清队列的端到端版本仍由本演练覆盖。
 - **只在一台机器上**：恢复实例是同机第二个容器，网络与磁盘都是本机的；没有演练主从/半同步复制、binlog 时间点恢复、跨机器
   拷贝 dump。RTO 里 11.4 秒起容器 + 10.4 秒起 JVM 的部分在生产形态（已有空实例、滚动起 pod）会不同。
 - **数据量**：8.4 MB 的库。导入 3.5 秒线性外推到 GB 级不可靠，需要在更大的库上重测一次。

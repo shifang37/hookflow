@@ -18,6 +18,8 @@
 > **A3 备份恢复演练也已完成**（2026-11-03）：`scripts/backup-restore.ps1` 把 `mysqldump --single-transaction` 的备份恢复到
 > 一台空 `mysql:8.4`，断言行数与状态分布全等，并在清空 broker 队列的前提下靠三条恢复路径让全部在途投递收敛；
 > 记录见 [failures/0008](failures/0008-backup-restore-drill.md)，运维检查清单见 [operations.md §10](operations.md)。
+> **A3 的第一条遗留也已关闭**（2026-11-03）：`DeliveryRecoveryIT` 用确定性重建的现场覆盖了"broker 丢消息 → `requeueStuckPending` →
+> `rearmStalePublished`"这条此前只有演练覆盖的恢复路径，IT 由 71 变为 73；设计取舍见 [failures/0008 §7](failures/0008-backup-restore-drill.md)。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -28,7 +30,7 @@
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
 | 后端单测 | **174 个通过** | `.\mvnw.cmd -o test` |
-| 后端集成测试 | **71 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
+| 后端集成测试 | **73 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
 | 前端单测 | **87 个通过**（16 个文件，~46s） | `cd frontend; npm test` |
 | 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径） | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
