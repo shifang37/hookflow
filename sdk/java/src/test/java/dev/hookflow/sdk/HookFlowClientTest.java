@@ -22,12 +22,11 @@ class HookFlowClientTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        server = new MockWebServer();
-        server.start();
+        server = LoopbackServer.start();
         sleeper = new RecordingSleeper();
         client = HookFlowClient.builder()
                 .apiKey("hk_test")
-                .baseUrl(server.url("/").toString())
+                .baseUrl(LoopbackServer.baseUrl(server))
                 .sleeper(sleeper)
                 .build();
     }

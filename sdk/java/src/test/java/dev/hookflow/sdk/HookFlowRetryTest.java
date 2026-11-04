@@ -22,8 +22,7 @@ class HookFlowRetryTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        server = new MockWebServer();
-        server.start();
+        server = LoopbackServer.start();
         sleeper = new RecordingSleeper();
         client = clientWith(RetryPolicy.defaults());
     }
@@ -37,7 +36,7 @@ class HookFlowRetryTest {
     private HookFlowClient clientWith(RetryPolicy policy) {
         return HookFlowClient.builder()
                 .apiKey("hk_test")
-                .baseUrl(server.url("/").toString())
+                .baseUrl(LoopbackServer.baseUrl(server))
                 .retryPolicy(policy)
                 .sleeper(sleeper)
                 .build();
@@ -241,7 +240,7 @@ class HookFlowRetryTest {
         };
         try (HookFlowClient interrupted = HookFlowClient.builder()
                 .apiKey("hk_test")
-                .baseUrl(server.url("/").toString())
+                .baseUrl(LoopbackServer.baseUrl(server))
                 .sleeper(interrupting)
                 .build()) {
             server.enqueue(new MockResponse().setResponseCode(500).setBody("{}"));

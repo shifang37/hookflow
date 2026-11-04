@@ -20,11 +20,10 @@ class HookFlowErrorTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        server = new MockWebServer();
-        server.start();
+        server = LoopbackServer.start();
         client = HookFlowClient.builder()
                 .apiKey("hk_test")
-                .baseUrl(server.url("/").toString())
+                .baseUrl(LoopbackServer.baseUrl(server))
                 .sleeper(new RecordingSleeper())
                 .retryPolicy(RetryPolicy.builder().maxAttempts(1).build())
                 .build();
