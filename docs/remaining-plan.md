@@ -323,9 +323,11 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 - [x] 两处错误的签名文档已修（UI 提示 + 路线图草案），并补前端断言
 - [x] README 有：5 分钟 quickstart、重试/幂等语义、验签示例、错误码表、GitHub Packages 引用
 - [x] `mvn install` 后，一个**独立的临时项目**（放在 `$env:TEMP`）能依赖并跑通 `sendEvent`（对 MockWebServer）
-- [ ] CI job 存在且绿（job 已在 GitHub 上实际跑过；首轮 `Unit tests` 因 MockWebServer 的
-      localhost/IPv6 重试抖动变红，已把监听地址与测试 base URL 钉到 `127.0.0.1`，
-      等待下一次 `sdk` workflow 确认）
+- [x] CI job 存在且绿（`sdk` workflow 已在 GitHub 上跑通 `mvn verify` + JaCoCo LINE 门禁、
+      JavaDoc、source/javadoc 打包。首轮 `Unit tests` 因 MockWebServer 的 localhost/IPv6
+      重试抖动变红：`DISCONNECT_AT_START` 后重连走到 `::1`，而监听只在 `127.0.0.1`。
+      已把监听地址与测试 base URL 都钉到 `127.0.0.1`，
+      [run #2](https://github.com/shifang37/hookflow/actions/runs/41818390736) 全绿）
 - [x] 文档更新：`docs/api.md` 加一段"官方 SDK"链接；`README.md` 的"没有 SDK"那条删掉；`docs/next-steps.md` 不再把 SDK 列为未做
 
 ### J.9 J 的坑（血泪版）
