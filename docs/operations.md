@@ -120,7 +120,7 @@ curl -X POST localhost:8080/v1/endpoints/7/pause -H "Authorization: Bearer $TOKE
 效果：新事件不再为它创建 delivery；已有的 `PENDING`/`RETRY_WAIT` 变为 `CANCELED`。
 **注意：`CANCELED` 是终态，resume 不会复活它们。** 如需补投，请对具体 delivery 重放（当前不支持重放 CANCELED）。
 
-**并发坑（v0.3 发现，见 [failures/0007](failures/0007-cancel-vs-claim-deadlock.md)）**：这个操作是"按 endpoint_id 批量 UPDATE"，与 worker 的"按主键逐行认领"加锁顺序相反，在高并发下会被 InnoDB 选为死锁牺牲者。v0.4 起重试逻辑已抽成公共组件 `common/RetryOnLockConflict`（3 次 + 递增退避 + `hookflow.db.lock_conflict{operation}` 指标），`EndpointService.pause` 与 `DemoController.reset` 共用同一实现。**以后新增任何"按维度批量改状态/批量删除"的运维操作，必须调用它**，否则它会在压力下随机失败；`RetryOnLockConflictTest` 只覆盖组件本身，新调用点要自己加一条验证。
+**并发坑（v0.3 发现，见 [failures/0007](failures/0007-cancel-vs-claim-deadlock.md)）**：这个操作是"按 endpoint_id 批量 UPDATE"，与 worker 的"按主键逐行认领"加锁顺序相反，在高并发下会被 InnoDB 选为死锁牺牲者。v0.4 起重试逻辑已抽成公共组件 `common/RetryOnLockConflict`（3 次 + 递增退避 + `hookflow.db.lock_conflict{operation}` 指标），`EndpointService.pause`、`DemoController.reset` 与 `EventIngestService.ingest`/`ingestBatch`（与 relay 的 outbox 扫描锁冲突）共用同一实现。**以后新增任何"按维度批量改状态/批量删除"的运维操作，必须调用它**，否则它会在压力下随机失败；`RetryOnLockConflictTest` 只覆盖组件本身，新调用点要自己加一条验证。
 
 ### 调整一个租户的并发预算
 

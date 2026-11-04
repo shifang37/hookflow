@@ -31,7 +31,7 @@
 | [0008](0008-backup-restore-drill.md) | A3 `mysqldump` → 恢复到空 `mysql:8.4` → 清空 broker 队列后自愈 | 14/14 断言逐项相等，空实例到可用 28 s，9 条在途投递 5 s 内全部 `SUCCEEDED`，丢消息的 3 条 `attempts=1` | 通过 |
 
 复现全部演练：`./scripts/drill.ps1 -DbPort 13306`（D1–D3，约 3 分钟）、`./scripts/backup-restore.ps1 -DbPort 13306`（A3，约 1 分钟）。
-A3 演练结束前会删掉自己建的 `drill-backup-*` 租户（`-KeepTenant` 可保留），开头还会扫掉被硬中断留下的租户；D1–D3 的 `scripts/drill.ps1` 目前不清理自己的 `drill-*` 租户，重放会留下它们。
+两套演练结束前都会删掉自己建的租户（D1–D3 的 `drill-*`、A3 的 `drill-backup-*`；`-KeepTenant` 可保留），开头还会扫掉被硬中断留下的同类租户，所以重放不会在 demo 库里积累租户与在途行。
 
 ## 三条缺陷的共同点
 

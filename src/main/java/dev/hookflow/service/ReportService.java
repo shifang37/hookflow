@@ -13,6 +13,8 @@ import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.web.PageResponse;
 import dev.hookflow.persistence.ReportMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -254,7 +256,16 @@ public class ReportService {
      * exists. It answers "how slow is the receiver" far better than an average, and it
      * comes with a denominator ({@code samples}) so an empty window is distinguishable
      * from a fast one.
+     *
+     * <p><b>Both statements must read one snapshot.</b> {@code samples}/{@code p50}/
+     * {@code p95}/{@code p99} and the histogram are two queries. Without a transaction
+     * a worker can settle an attempt between them, so the bucket counts add up to a
+     * different number than {@code samples} — observed on CI as {@code samples=3809,
+     * buckets=3803}. {@code REPEATABLE READ} pins the first consistent read's InnoDB
+     * snapshot for both statements (the MySQL default, made explicit here because the
+     * invariant depends on it).
      */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public LatencyResponse latency(String range, Long tenantId) {
         String label = normalizeRange(range);
         int hours = hoursOf(label);

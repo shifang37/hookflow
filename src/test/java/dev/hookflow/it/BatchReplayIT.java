@@ -1,5 +1,6 @@
 package dev.hookflow.it;
 
+import dev.hookflow.common.RetryOnLockConflict;
 import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.persistence.TenantMapper;
 import dev.hookflow.service.DeliveryService;
@@ -13,6 +14,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,6 +39,8 @@ class BatchReplayIT extends AbstractIntegrationTest {
     private DeliveryService deliveryService;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private RetryOnLockConflict retryOnLockConflict;
 
     private long tenantId;
     private long otherTenantId;
@@ -66,25 +71,72 @@ class BatchReplayIT extends AbstractIntegrationTest {
         foreignDead = insertDelivery(otherTenantId, foreign, otherEndpoint, "DEAD", 8);
     }
 
+    /**
+     * Deletes the fixtures while the relay and worker are still live.
+     *
+     * <p>The old version deleted attempts, then outbox, then deliveries. A replay
+     * leaves its deliveries PENDING with an outbox row, so the worker could claim one
+     * and insert an IN_PROGRESS attempt <em>between</em> those statements; the final
+     * {@code DELETE FROM delivery} then failed with an FK violation. Canceling first
+     * closes the claim window (the claim CAS requires PENDING), and waiting for
+     * in-flight attempts to settle closes the insert window, so children can be
+     * deleted before parents deterministically. A lock conflict during the bulk
+     * update is retried by the same component production uses.
+     */
     @AfterEach
     void cleanUp() {
         for (long tenant : List.of(tenantId, otherTenantId)) {
-            jdbc.update("""
-                    DELETE a FROM delivery_attempt a
-                      JOIN delivery d ON d.id = a.delivery_id
-                     WHERE d.tenant_id = ?
-                    """, tenant);
-            jdbc.update("""
-                    DELETE o FROM outbox o
-                      JOIN delivery d ON d.id = o.aggregate_id
-                     WHERE o.aggregate_type = 'delivery' AND d.tenant_id = ?
-                    """, tenant);
-            jdbc.update("DELETE FROM delivery WHERE tenant_id = ?", tenant);
-            jdbc.update("DELETE FROM event WHERE tenant_id = ?", tenant);
-            jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenant);
-            jdbc.update("DELETE FROM endpoint WHERE tenant_id = ?", tenant);
-            jdbc.update("DELETE FROM tenant WHERE id = ?", tenant);
+            retryOnLockConflict.executeWithoutResult("it.batch-replay.cleanup",
+                    () -> deleteTenantData(tenant));
         }
+    }
+
+    private void deleteTenantData(long tenant) {
+        // No new claims after this commit: a worker's UPDATE ... WHERE status='PENDING'
+        // matches nothing, and a row already claimed has its settle transition fenced.
+        jdbc.update("""
+                UPDATE delivery
+                   SET status = 'CANCELED'
+                 WHERE tenant_id = ?
+                   AND status IN ('PENDING', 'RETRY_WAIT', 'DELIVERING')
+                """, tenant);
+
+        // Removing the messages that are still waiting to be published stops the relay
+        // from handing the worker more work for this tenant.
+        jdbc.update("DELETE FROM outbox WHERE tenant_id = ?", tenant);
+
+        awaitNoInProgressAttempts(tenant);
+
+        // A recovery tick that selected an outbox row just before the cancel can still
+        // append one; the second delete is cheap and leaves no orphans behind.
+        jdbc.update("DELETE FROM outbox WHERE tenant_id = ?", tenant);
+        jdbc.update("""
+                DELETE a FROM delivery_attempt a
+                  JOIN delivery d ON d.id = a.delivery_id
+                 WHERE d.tenant_id = ?
+                """, tenant);
+        jdbc.update("DELETE FROM delivery WHERE tenant_id = ?", tenant);
+        jdbc.update("DELETE FROM event WHERE tenant_id = ?", tenant);
+        jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenant);
+        jdbc.update("DELETE FROM endpoint WHERE tenant_id = ?", tenant);
+        jdbc.update("DELETE FROM tenant WHERE id = ?", tenant);
+    }
+
+    private void awaitNoInProgressAttempts(long tenant) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            Integer inProgress = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM delivery_attempt a
+                      JOIN delivery d ON d.id = a.delivery_id
+                     WHERE d.tenant_id = ? AND a.status = 'IN_PROGRESS'
+                    """, Integer.class, tenant);
+            if (inProgress == null || inProgress == 0) {
+                return;
+            }
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(25));
+        }
+        throw new IllegalStateException("tenant " + tenant
+                + " still has an IN_PROGRESS attempt after 10s; refusing to delete under a live worker");
     }
 
     @Test

@@ -5,6 +5,27 @@
 
 ## [Unreleased]
 
+### 修复
+
+- `scripts/drill.ps1`（D1–D3）不再在 demo 库留下 `drill-*` 租户：结束前逐表删除自己建的租户，`finally` 兜底受控中止，
+  pre-flight 清扫被硬中断留下的同类租户，`-KeepTenant` 可保留——与 `scripts/backup-restore.ps1` 已验证的修法一致
+- 三处 IT flake 的根因已修，CI 不再靠 rerun：
+  - `ReportService.latency` 把 `latencyStats` 与 `latencyHistogram` 放进同一个 `REPEATABLE READ` 事务，
+    两个查询读同一 InnoDB 快照，`samples` 与桶计数不可能再差几行（CI 曾见 `samples=3809`、`buckets=3803`）
+  - `BatchReplayIT.cleanUp` 先把租户的非终态 delivery 置为 `CANCELED` 并删 outbox，堵住 claim/发布窗口；
+    再等所有 `IN_PROGRESS` attempt 结算，最后按外键顺序删除，消除 `DELETE FROM delivery` 的 FK 竞争
+  - `EventIngestService.ingest` / `ingestBatch` 用 `RetryOnLockConflict` 重试与 relay 的 outbox 锁冲突，
+    这正是 `ReadApiIT.setUp` 偶发 `DeadlockLoserDataAccess` 的来源；重试安全，因为失败事务已回滚且 idempotency key 不变
+
+### 测试 / 构建
+
+- 根 `pom.xml` 的 `coverage` profile 增加 `jacoco:check`：单测 LINE 覆盖率低于 28%（2026-11-04 基线 29.1%）时构建失败；
+  Java SDK 自己的 80% 门禁不变
+- 前端新增 `src/api/queries.test.tsx`（26 个用例）：真实 `QueryClient` + mocked `api`，覆盖全部查询/变更 hooks、
+  轮询预算、缓存键、`enabled` 门控、`keepPreviousData` 与每个 mutation 的失效路径；`queries.ts` 覆盖率 24% → 100%
+- 后端新增 `EventIngestRetryTest`：死锁时 ingest 重试整个事务、第二次只创建一个事件，并断言
+  `hookflow.db.lock_conflict{operation=event.ingest}` 计数为 1；单测总数 174 → **175**，LINE 覆盖率 28.3% → **29.1%**
+
 ## [0.4.0] — 2026-11-03
 
 主题：**从「能讲」到「能运维」**。v0.3 用测量证明了平台的性质，这一版把它变成能点、能看、能部署、能接入的东西：
@@ -141,8 +162,8 @@
 - **A3 备份恢复演练**未做（唯一没覆盖的数据丢失场景）；**4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流**未开始
 - P3 的 2000 events/s 目标未达：当前 455–470 events/s，下一个瓶颈是 worker 的两次提交（[§20](docs/performance.md)）
 - Codecov 上传未验证（没有 `CODECOV_TOKEN`）；后端单测覆盖率有数字（LINE 28.3%，IT 不计）但没有门槛
-- 三个已知的 IT flake 根因未修（`ReadApiIT.latencyHistogramIsComplete` 两条 SQL 不是同一快照、`BatchReplayIT.cleanUp`
-  清理时后台仍在写、`ReadApiIT.setUp` 死锁），CI 靠 rerun
+- ~~三个已知的 IT flake 根因未修（`ReadApiIT.latencyHistogramIsComplete` 两条 SQL 不是同一快照、`BatchReplayIT.cleanUp`
+  清理时后台仍在写、`ReadApiIT.setUp` 死锁），CI 靠 rerun~~ —— **已于 2026-11-04 修复**，见 [Unreleased](#unreleased)
 - 控制台没有登录与 RBAC（只有运营令牌 + 租户 Key）；`/demo/` 无鉴权且前端没有自动化测试，只应在本地 `all` profile 打开
 
 ## [0.3.0] — 2026-10-22

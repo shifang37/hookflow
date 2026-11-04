@@ -32,7 +32,9 @@ import java.util.function.Supplier;
  * <p><b>What the caller owes.</b> The action must be <em>idempotent</em>: it will
  * run again from the start, with nothing carried over from the failed attempt (the
  * transaction was rolled back). All current users are: pausing an already paused
- * endpoint is a no-op, and the demo reset deletes rows it has already deleted.
+ * endpoint is a no-op, the demo reset deletes rows it has already deleted, and an
+ * ingest retry either inserts the event once or resolves to the existing row via
+ * the idempotency key.
  *
  * <p>The retry is deliberately bounded and short (3 attempts, 20/40 ms). A lock
  * conflict that survives that is not transient any more, and making the caller wait

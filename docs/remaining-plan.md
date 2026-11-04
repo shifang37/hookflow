@@ -11,7 +11,7 @@
 > **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
 > GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
 > **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（build 一次
-> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过）；`helm-v0.1.0` 的
+> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过；三处 flake 根因已于 2026-11-04 修复）；`helm-v0.1.0` 的
 > `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`。
 > **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
 > 下一步是 **U（控制台小缺口）**。
@@ -21,6 +21,7 @@
 > **A3 的第一条遗留也已关闭**（2026-11-03）：`DeliveryRecoveryIT` 用确定性重建的现场覆盖了"broker 丢消息 → `requeueStuckPending` →
 > `rearmStalePublished`"这条此前只有演练覆盖的恢复路径，IT 由 71 变为 73；设计取舍见 [failures/0008 §7](failures/0008-backup-restore-drill.md)。
 > **A3 的第二条遗留也已关闭**（2026-11-03）：`scripts/backup-restore.ps1` 现在在演练结束前删掉自己建的 `drill-backup-*` 租户（`-KeepTenant` 可保留），pre-flight 还会扫掉被硬中断留下的租户并清掉它们的孤儿消息，所以重放不再往 demo 库里积累租户与在途行。
+> **D1–D3 的同类遗留也已关闭**（2026-11-04）：`scripts/drill.ps1` 搬了同一套「删自己 + pre-flight 清扫」修法（前缀 `drill-*`、`finally` 兜底、`-KeepTenant`），两套演练都不再留下租户。
 > 依赖关系：J 与 K/G/C 互不依赖；G 的指标是 K 的 HPA 和之后告警的前提；C 里 Helm 发布依赖 K。
 > 估时用路线图的口径：J 2–3 天，K 2–3 天，G 1–2 天，C 2–3 天，U 0.5–1 天，P 2 天，H 1 周。
 
@@ -30,10 +31,11 @@
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **174 个通过** | `.\mvnw.cmd -o test` |
+| 后端单测 | **175 个通过** | `.\mvnw.cmd -o test` |
+| 后端单测覆盖率 | **LINE 29.1%**（824/2833），`jacoco:check` 防回退线 ≥ 28% | `.\mvnw.cmd -o -Pcoverage test` |
 | 后端集成测试 | **73 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
-| 前端单测 | **87 个通过**（16 个文件，~46s） | `cd frontend; npm test` |
-| 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径） | `npm run test:coverage` |
+| 前端单测 | **113 个通过**（17 个文件，~63s） | `cd frontend; npm test` |
+| 前端覆盖率 | 语句 85.31% / 分支 75.39% / 函数 80.87% / 行 84.86%，~63s（Vitest 4 的 V8 口径）；`queries.ts` 四项均 100% | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
 | 监控栈 | Prometheus + Grafana，**3 个面板 / 2 条告警** | `docker compose --profile monitoring up -d`（详见 [monitoring.md](monitoring.md)） |
 | Helm chart | `helm lint` dev/prod 0 failed；kind 上三角色 Ready | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |

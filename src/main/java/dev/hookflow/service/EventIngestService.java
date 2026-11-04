@@ -1,5 +1,6 @@
 package dev.hookflow.service;
 
+import dev.hookflow.common.RetryOnLockConflict;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.domain.delivery.Delivery;
 import dev.hookflow.domain.endpoint.Endpoint;
@@ -72,17 +73,20 @@ public class EventIngestService {
     private final DeliveryMapper deliveryMapper;
     private final OutboxWriter outboxWriter;
     private final TransactionTemplate transactionTemplate;
+    private final RetryOnLockConflict retryOnLockConflict;
 
     public EventIngestService(EventMapper eventMapper,
                               EndpointMapper endpointMapper,
                               DeliveryMapper deliveryMapper,
                               OutboxWriter outboxWriter,
-                              TransactionTemplate transactionTemplate) {
+                              TransactionTemplate transactionTemplate,
+                              RetryOnLockConflict retryOnLockConflict) {
         this.eventMapper = eventMapper;
         this.endpointMapper = endpointMapper;
         this.deliveryMapper = deliveryMapper;
         this.outboxWriter = outboxWriter;
         this.transactionTemplate = transactionTemplate;
+        this.retryOnLockConflict = retryOnLockConflict;
     }
 
     public record IngestResult(long eventId, int deliveryCount, boolean idempotentReplay) {
@@ -110,8 +114,14 @@ public class EventIngestService {
      */
     public IngestResult ingest(long tenantId, String eventType, String payloadJson, String idempotencyKey) {
         try {
-            return transactionTemplate.execute(status ->
-                    ingestInTransaction(tenantId, eventType, payloadJson, idempotencyKey));
+            // The relay locks outbox rows with FOR UPDATE SKIP LOCKED while this
+            // transaction inserts them; InnoDB can pick either one as the deadlock
+            // victim. Retrying the whole transaction is the standard answer (and it
+            // is safe: the rolled-back attempt is invisible, and the idempotency key
+            // still makes a retry after a lost race resolve to the original event).
+            return retryOnLockConflict.execute("event.ingest", () ->
+                    transactionTemplate.execute(status ->
+                            ingestInTransaction(tenantId, eventType, payloadJson, idempotencyKey)));
         } catch (DuplicateKeyException lostRace) {
             // The losing transaction has been rolled back by now, so this read runs
             // on a fresh connection and can observe the winner's committed row.
@@ -159,7 +169,11 @@ public class EventIngestService {
         DuplicateKeyException lastRace = null;
         for (int attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt++) {
             try {
-                return ingestBatchOnce(tenantId, items);
+                // Same relay-vs-ingest deadlock as the single-event path. Only the
+                // write phase runs in a transaction, and a retry re-reads pre-existing
+                // events first, so a rolled-back attempt leaves nothing behind.
+                return retryOnLockConflict.execute("event.ingestBatch",
+                        () -> ingestBatchOnce(tenantId, items));
             } catch (DuplicateKeyException lostRace) {
                 lastRace = lostRace;
                 log.warn("A batch of {} events lost an idempotency race (attempt {}/{}); "

@@ -31,7 +31,9 @@ jobs:
 
       # Coverage comes from unit tests only: the `coverage` profile binds the JaCoCo
       # agent to surefire and never to the Testcontainers ITs below, so the number
-      # Codecov sees is not diluted (or slowed down) by integration tests.
+      # Codecov sees is not diluted (or slowed down) by integration tests. The same
+      # profile runs jacoco:check, which fails the build if LINE coverage drops
+      # below the 28% baseline recorded in pom.xml.
       - name: Unit tests with JaCoCo
         run: ./mvnw -B -Pcoverage test
 

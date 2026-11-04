@@ -3,13 +3,13 @@
 ## 文档目的
 
 本文档面向**校招/实习求职场景**，列出 HookFlow 项目的优化方向、技术选型和实施计划。
-当前项目已具备**生产级后端架构**（后端 247 个测试、14 条 ADR、完整的故障恢复机制），
+当前项目已具备**生产级后端架构**（后端 248 个测试、14 条 ADR、完整的故障恢复机制），
 并在前端控制台、Java SDK、K8s 和监控上完成了大部分产品化工作。
 
 > **状态同步（2026-11-03）**：以下勾选已按 2026-10-30 的 `master` 复核，2026-11-02 收掉了控制台的
 > 三个小尾巴（见 [remaining-plan.md §6](remaining-plan.md)），2026-11-03 补上了 broker 丢消息恢复路径的
 > `DeliveryRecoveryIT`。完成度速览见下一节。当前基线：
-> 后端 174 单测 + 73 集成、前端 87、Java SDK 66，共 400 个测试；14 条 ADR。
+> 后端 175 单测 + 73 集成、前端 113、Java SDK 66，共 427 个测试；14 条 ADR。
 
 **核心原则**：
 - ✅ 优先提升**可视化**和**易用性**（面试时更容易展示）
@@ -1818,7 +1818,8 @@ hookflow_outbox_backlog
 ### 验收标准
 
 - [x] 每次 push 自动运行测试 —— `ci.yml`（push `master`/`main` 与所有 PR；后端单测 + `verify`、前端 typecheck/lint/test/build）。
-      run #22 与任务 U 后的 run #26 均绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过。前端 exit 1
+      run #22 与任务 U 后的 run #26 均绿；build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败一次，重跑通过
+      （三处 IT flake 的根因已于 2026-11-04 修复）。前端 exit 1
       曾由 Vitest 3 的 `onTaskUpdate` unhandled error 引起（77 个测试其实全过），已升级 Vitest 4.1.12
 - [ ] 覆盖率报告自动上传到 Codecov —— `ci.yml` 的「Unit tests with JaCoCo」+「Upload coverage to Codecov」。
       **上传未启用**：仓库没有 `CODECOV_TOKEN`，步骤打印原因后跳过（`fail_ci_if_error: false`），
@@ -1840,8 +1841,8 @@ hookflow_outbox_backlog
 | Java SDK | `.github/workflows/sdk.yml`（发布：`sdk-publish.yml`） |
 | Python SDK（预置） | `.github/workflows/python-sdk.yml`；`sdk/python/` 还不存在，路径过滤使它现在不会运行 |
 
-本机能验证的是：`./mvnw -o -Pcoverage test`（174 个通过，LINE 28.3%，仅单测）、
-`helm package`/`helm lint`、前端 81 个测试与 `npm run build:backend`。
+本机能验证的是：`./mvnw -o -Pcoverage test`（175 个通过，LINE 29.1%，仅单测、`jacoco:check` 门禁 ≥ 28%）、
+`helm package`/`helm lint`、前端 113 个测试与 `npm run build:backend`。
 `docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
 但 **GitHub Actions 的 `docker` run #8 已经成功构建并推送 GHCR**。
 Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；只剩 Codecov 上传未验证，本地无法伪造。

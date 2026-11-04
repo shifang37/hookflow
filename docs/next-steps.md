@@ -23,11 +23,11 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **174 个通过** | `./mvnw -o test` |
-| 后端单测覆盖率 | **LINE 26.1%**（728/2786）、BRANCH 25.4%，仅单测；IT 不采集 | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
+| 后端单测 | **175 个通过** | `./mvnw -o test` |
+| 后端单测覆盖率 | **LINE 29.1%**（824/2833）、BRANCH 28.4%，仅单测；IT 不采集；`jacoco:check` 门禁 LINE ≥ 28% | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
 | 后端集成测试 | **73 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **87 个通过**（16 个文件），~46s | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 70.79% / 分支 72.51% / 函数 60.81% / 行 69.72%，~100s（Vitest 4 的 V8 口径，比 3.x 更严格） | `npm run test:coverage` |
+| 前端单测 | **113 个通过**（17 个文件），~63s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 85.31% / 分支 75.39% / 函数 80.87% / 行 84.86%，~63s（Vitest 4 的 V8 口径，比 3.x 更严格）；`queries.ts` 四项均 100% | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
 | CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #20 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；**未验证**：Codecov 上传 | `.github/workflows/` |
@@ -44,13 +44,15 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 > 本文 §4E 等历史段落里的旧百分比是 Vitest 3 口径，不能直接和新数字比较。
 
 > 2026-10-30 复跑时 `ReadApiIT.latencyHistogramIsComplete` 第一次失败（`samples=3809`、`buckets=3803`）：
-> `ReportService.latency` 的 samples 与 buckets 是两条 SQL，期间后台 worker 写入了 6 行。单独复跑
-> `ReadApiIT`（17 个）和整套 `verify`（69 个）都通过。这是既有的时间窗竞态，不是任务 C 引入的；
-> 要根治得让两条查询读同一个快照，暂未改。CI run #18 另有一次 `ReadApiIT.setUp` 的
-> `DeadlockLoserDataAccess` 偶发失败，也是同类并发 flake。CI run #20 的第一次 build 又出现
-> `BatchReplayIT.cleanUp` 的 FK 约束失败（`DELETE FROM delivery` 时 `delivery_attempt` 还有行），
-> `gh run rerun --failed` 后整套 69 个 IT 通过；共同点是后台 worker/relay 在测试清理时还在写。
-> 这三处目前都按 flake 处理，没有改生产代码。
+> `ReportService.latency` 的 samples 与 buckets 是两条 SQL，期间后台 worker 写入了 6 行。CI run #18 另有一次
+> `ReadApiIT.setUp` 的 `DeadlockLoserDataAccess`，CI run #20 的第一次 build 又出现 `BatchReplayIT.cleanUp`
+> 的 FK 约束失败（`DELETE FROM delivery` 时 `delivery_attempt` 还有行）；共同点是后台 worker/relay 在测试
+> 清理或写入时仍在跑。
+>
+> **2026-11-04 三处根因已修**（见 [CHANGELOG 的 Unreleased](../CHANGELOG.md)）：latency 的两条查询放进同一个
+> `REPEATABLE READ` 快照；`BatchReplayIT.cleanUp` 先取消、等 `IN_PROGRESS` attempt 结算，再按外键顺序删除；
+> `EventIngestService.ingest` / `ingestBatch` 用 `RetryOnLockConflict` 重试与 relay 的 outbox 锁冲突。
+> 本机随后连续 3 次 `./mvnw -o verify`（当时 174 单测 + 73 IT）全绿，不再依赖 `gh run rerun --failed`。
 
 ---
 
@@ -220,8 +222,8 @@ config，再用 `axios.getUri(config)` 跑同一个 params 序列化器，所以
 效果：`src/api` 语句覆盖 55.6% → **61.6%**（`client.ts` 基本全覆盖；掉下来的仍是 `queries.ts` 的
 hook），整包函数覆盖 49.7% → **61.2%**。
 
-`queries.ts` 的 hook 仍然只有 24% 覆盖——那是另一件事（要 `renderHook` + QueryClient wrapper），
-这次没做。
+`queries.ts` 的 hook 当时只有 24% 覆盖——那是另一件事（要 `renderHook` + QueryClient wrapper），
+这次没做；2026-11-04 已用 `src/api/queries.test.tsx` 补齐（见 §7 第 10 条）。
 
 ### F. `topFailureReasons` 没有被真实死信覆盖 —— 已完成
 
@@ -399,11 +401,12 @@ ae43506 feat: operator console - admin read API and a React UI
    `helm-v0.1.0` 已发布到 `oci://ghcr.io/shifang37/charts`；**没有验证**的只剩 Codecov 上传
    （仓库没有 `CODECOV_TOKEN`，步骤会跳过并打印原因）。`python-sdk.yml` 只是预置，
    `sdk/python/` 还不存在。
-10. 本地质量债（不在路线图里）：`queries.ts` 的 hook 覆盖 24%（`renderHook` + `QueryClient` wrapper）；
-    §23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
+10. ~~本地质量债：`queries.ts` 的 hook 覆盖 24%~~ —— 已完成（2026-11-04）：新增
+    `frontend/src/api/queries.test.tsx`（26 个用例，`renderHook` + 真实 `QueryClient`），`queries.ts` 的语句 / 分支 /
+    函数 / 行覆盖均为 100%；§23.3 已经说明图表查询剩下的 ~100 ms 全在聚合，索引到顶了，下一步是预聚合而不是索引。
 11. ~~小尾巴：`AdminController` 里那个从没用过的 `ApiKeyMapper` 注入还在。~~ 已移除（2026-11-02）；
     同一轮把 [remaining-plan.md §6](remaining-plan.md) 的 U-4（签名提示断言）与 U-5（时间范围筛选）也收掉了。
 12. ~~A3 备份恢复演练~~ —— 已完成（2026-11-03）：`scripts/backup-restore.ps1`（可重放），
     记录与 RTO 见 [failures/0008](failures/0008-backup-restore-drill.md)，README 的故障演练一节与
     [operations.md §10](operations.md) 的恢复后检查清单同步更新。恢复后服务在**无 broker 消息**的前提下自愈。
-13. ~~A3 的另一条遗留：demo 库积累演练租户~~ —— 已完成（2026-11-03）：演练结束前删掉自己建的租户，pre-flight 扫掉被硬中断留下的租户，见 [failures/0008 §7](failures/0008-backup-restore-drill.md)。D1–D3 的 `scripts/drill.ps1` 仍会留下 `drill-*` 租户，未处理。
+13. ~~demo 库积累演练租户~~ —— 全部关闭：A3 于 2026-11-03 修好（演练结束前删掉自己建的租户，pre-flight 扫掉被硬中断留下的租户，见 [failures/0008 §7](failures/0008-backup-restore-drill.md)）；D1–D3 的 `scripts/drill.ps1` 于 2026-11-04 搬了同一套修法（`drill-*` 前缀、`finally` 兜底、`-KeepTenant`），重放不再留下租户。

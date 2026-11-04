@@ -347,8 +347,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 174 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 174 单元 + 73 集成 = 247 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
+./mvnw test      # 175 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
+./mvnw verify    # 175 单元 + 73 集成 = 248 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -398,7 +398,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 174 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 175 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过；三处 IT flake 的根因已于 2026-11-04 修复，见 [CHANGELOG](CHANGELOG.md)）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
@@ -407,7 +407,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；首次添加时它曾因 workflow 文件自身触发而失败一次（没有 `sdk/python`），已把自身从触发路径移除；`helm-v0.1.0` tag 又误触发过一次（GitHub 对 tag push 不评估 paths），已加 `branches: ['**']`，任务 P 落地后由 `sdk/python/**` 自动生效 |
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
-174 个测试的 **LINE 28.3%**（801/2831，另有 BRANCH 28.2%），报告在 `target/site/jacoco/`。
+175 个测试的 **LINE 29.1%**（824/2833，另有 BRANCH 28.4%），报告在 `target/site/jacoco/`。同一 profile 里的
+`jacoco:check` 把这条基线设成防回退线：LINE 低于 **28%** 时构建立即失败（SDK 自己的 80% 门禁不受影响）。
 这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 73 个 IT 覆盖的路径不计入，所以不要拿它
 和 SDK 的 92.9%（SDK 自己的测试）比较。
 
@@ -419,7 +420,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 `./scripts/drill.ps1` 把三个角色作为独立 JVM 启动，然后真的杀进程、真的停容器。完整记录在 `docs/failures/0004`–`0006`。
 `./scripts/backup-restore.ps1` 覆盖唯一会真的丢数据的场景——MySQL 主库：`mysqldump` → 恢复到**空的** `mysql:8.4` → 逐表断言 →
 清空 broker 队列 → 三角色指向恢复实例自愈，记录在 [`docs/failures/0008`](docs/failures/0008-backup-restore-drill.md)。
-演练结束会删掉自己建的 `drill-backup-*` 租户（`-KeepTenant` 可保留以便排查），开头也会扫掉被硬中断（`kill -9`、断电）留下的租户，所以重放不会在 demo 库里积累租户与在途行。
+两套演练结束都会删掉自己建的租户（D1–D3 的 `drill-*`、A3 的 `drill-backup-*`；`-KeepTenant` 可保留以便排查），开头也会扫掉被硬中断（`kill -9`、断电）留下的租户，所以重放不会在 demo 库里积累租户与在途行。
 
 ```bash
 docker compose up -d            # 若 3306 被占用：DB_PUBLISH_PORT=13306 docker compose up -d
