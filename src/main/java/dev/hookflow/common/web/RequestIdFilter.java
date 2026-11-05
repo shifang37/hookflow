@@ -12,6 +12,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Assigns a request id to every call and echoes it back in {@code X-Request-Id}.
@@ -25,11 +26,18 @@ public class RequestIdFilter extends OncePerRequestFilter {
     public static final String ATTRIBUTE = "hookflow.requestId";
     public static final String MDC_KEY = "requestId";
 
+    /**
+     * An incoming id is reflected into a response header, an error body and the log
+     * MDC. Restricting it to a visible-token alphabet keeps a newline or a control
+     * character from injecting a fake log line; anything else is replaced by a UUID.
+     */
+    private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._:-]{1,64}");
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String incoming = request.getHeader(HEADER);
-        String requestId = (incoming == null || incoming.isBlank() || incoming.length() > 64)
+        String requestId = (incoming == null || !SAFE_REQUEST_ID.matcher(incoming).matches())
                 ? UUID.randomUUID().toString()
                 : incoming;
         request.setAttribute(ATTRIBUTE, requestId);

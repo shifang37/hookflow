@@ -43,7 +43,7 @@ ingest 的成本是「每事件一个事务 + 约 7 条语句 + 1 次 fsync」�
 
 - **整批原子，不是部分提交**。一条坏数据会让整批失败，调用方要自己定位。因此校验全部前置在 controller（`eventType` / `payload` / `idempotencyKey`），只有 DB 级错误才可能触发整批失败。
 - **500 × 每事件 endpoint 数**是一个事务的行数上限，没有对"单事件扇出到很多 endpoint"做额外限制。
-- **批内同一个键、不同 payload** 时按第一次出现的 payload 写入（幂等键优先，不比较 payload）。这与单条路径一致——`40901 IDEMPOTENCY_KEY_REUSED` 在 `docs/api.md` 里列着，但从未真正实现 payload 比对。批量让这个语义更容易被注意到。
+- **批内同一个键、不同 payload** 时按第一次出现的 payload 写入（幂等键优先，不比较 payload）。这与单条路径一致——`40901 IDEMPOTENCY_KEY_REUSED` 是保留码，`docs/api.md` 已标注当前版本不会返回；payload 比对尚未实现。批量让这个语义更容易被注意到。
 - 批量响应是**数组**，单条是对象；两种客户端要分别处理。
 - "全部是重放"的批次有 3 条查询（按幂等键查、按 `event_id` 查计数、无插入），比逐条少，但不是零。
 - **单条路径没有复用批量的执行路径**：两者共享 mapper 与 `OutboxWriter`，但单条事务形状不同（插入后立刻拿 id，再逐 endpoint 扇出）。合并会让单条路径多一次读回，因此保留了两份编排逻辑。

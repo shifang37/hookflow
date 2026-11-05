@@ -100,7 +100,9 @@ public class ReportService {
         String type = blankToNull(eventType);
         int safeSize = clampSize(size);
         int safePage = Math.max(page, 0);
-        int offset = safePage * safeSize;
+        // long: page * size overflows int for a large page and would become a
+        // negative OFFSET, which MySQL rejects as a 500 instead of an empty page.
+        long offset = (long) safePage * safeSize;
 
         List<EventSummaryResponse> items = reportMapper
                 .listEventSummaries(tenantId, type, from, to, safeSize, offset)
@@ -121,7 +123,7 @@ public class ReportService {
         String term = blankToNull(search);
         int safeSize = clampSize(size);
         int safePage = Math.max(page, 0);
-        int offset = safePage * safeSize;
+        long offset = (long) safePage * safeSize;
 
         List<TenantResponse> items = reportMapper.listTenants(term, safeSize, offset).stream()
                 .map(ReportService::toTenantResponse)

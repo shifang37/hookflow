@@ -14,6 +14,9 @@
 ![Redis](https://img.shields.io/badge/Redis-8-DC382D)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
+> 当前工作树是 `0.4.1-SNAPSHOT`：在已发布的 `v0.4.0` 之上加入了控制台登录与 ADMIN/VIEWER 角色、
+> Endpoint 软删除与测试发送等，变更记录见 [CHANGELOG](CHANGELOG.md)。
+
 ---
 
 ## 一句话解释它解决什么问题
@@ -21,6 +24,26 @@
 业务系统（比如订单服务）要把 `order.paid` 这类事件推给客户的服务器。客户的服务随时可能返回 500、超时、或者干脆连不上。**如果推送逻辑写在订单服务里，那么：网络抖动会拖慢下单接口，投递失败无人知道，失败之后没有重试，重试又可能把同一个事件推两次。**
 
 HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语义明确的投递平台**：业务系统只负责"提交事件"，剩下的签名、排队、重试、死信、追踪、重放都由平台承担。
+
+## 功能特性
+
+- **可靠摄入**：单条与批量（每批最多 500 条）提交，事件、投递与 outbox 在同一 MySQL 事务内落库；幂等键由唯一约束保证。
+- **可验证投递**：HMAC-SHA256 签名绑定 event / delivery id 与时间戳，接收方可以独立验签。
+- **失败可收敛**：5xx、408、429 与网络错误按指数退避 + 抖动重试；不可重试的 4xx 直接进入死信，可单条或批量重放。
+- **多租户隔离**：Redis 固定窗口限流、租户并发预算、Endpoint 并发上限、加权轮询公平调度。
+- **过载保护**：租户级 429 / 平台级 503 两级水位线，配合 `Retry-After`，把积压留在可查询的 MySQL 里。
+- **可观测与可运维**：Prometheus 指标、Grafana 面板、OpenTelemetry trace、健康探针、Helm chart 与真实故障演练。
+- **客户端与界面**：React 运营控制台、Java SDK、`/demo/` 演示控制台。
+
+## 技术栈
+
+| 层 | 选型 |
+|---|---|
+| 后端 | Java 21、Spring Boot 4.1、Spring Security（控制台会话）、MyBatis、Flyway |
+| 存储与消息 | MySQL 8.4（唯一权威状态）、RabbitMQ 4（quorum queue）、Redis 8（只做限流） |
+| 可观测 | Micrometer、Prometheus、Grafana、OpenTelemetry（OTLP，默认不导出） |
+| 前端 | React 18、TypeScript、Vite、Ant Design、TanStack Query、Recharts |
+| 测试与交付 | JUnit 5、jqwik、Testcontainers、Vitest、Docker、Helm、GitHub Actions |
 
 ## 它不是
 
@@ -46,7 +69,7 @@ HookFlow 把这件事从业务系统里拆出来，变成一个**独立的、语
 **结论：B7/B8 之后，450 events/s 可以被完整送到客户（455–470/s，outbox 始终只有几十到 ~200 行、观察期归零）；
 900 时 worker 先满（382–421/s），relay 这时还有余量（batch 100 发 449/s、batch 200 发 731/s）。
 worker 的杠杆是**并发**（32 并发 + 池 32，不是提交次数），relay 的杠杆是 **batch-size**（50 → 100），
-而把 claim 与 markPublished 合并**不值得做**：900 下交付不是 relay 限制的（[performance.md §22.4](docs/performance.md#224-claim--markpublished-要不要合并不合并)）。**
+而把 claim 与 markPublished 合并不值得：900 下交付不是 relay 限制的（[performance.md §22.4](docs/performance.md#224-claim--markpublished-要不要合并不合并)）。**
 
 > 450 那行的 p99 160 ms 比 B5 时的 86.6 ms 高——32 并发下 ingest 与 worker 更频繁地抢同一批 DB 连接。
 > 这是吞吐换来的（§21.2 有对照）；它仍在 §14.3 记的本机 p99 散布之内，所以**不能**声称"32 并发没有让入口变慢"。
@@ -174,6 +197,7 @@ curl -s -X POST localhost:8080/v1/admin/tenants \
 
 ```bash
 # 5. 建一个回调 endpoint，拿到签名密钥（同样只出现一次）
+TOKEN=hk_...                    # 换成上一步响应里的 apiKey
 curl -s -X POST localhost:8080/v1/endpoints \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"url":"http://127.0.0.1:9099/hook","subscribedTypes":"order.paid"}'
@@ -353,7 +377,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 统一错误体：
 
 ```json
-{"code": 40901, "error": "IDEMPOTENCY_KEY_REUSED", "message": "...", "requestId": "...", "timestamp": "..."}
+{"code": 40903, "error": "ILLEGAL_TRANSITION", "message": "Only DEAD deliveries can be replayed (current: SUCCEEDED)", "requestId": "...", "timestamp": "..."}
 ```
 
 `requestId` 同时出现在响应头 `X-Request-Id` 和日志 MDC 里，可以直接拿它去搜日志。
@@ -363,8 +387,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 ## 测试：每个测试在证明什么
 
 ```bash
-./mvnw test      # 175 个单元测试（含 16 个 jqwik 属性测试、8 个公平调度、5 个降载），秒级，不需要 Docker
-./mvnw verify    # 175 单元 + 73 集成 = 248 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
+./mvnw test      # 185 个单元测试（含 17 个 jqwik 属性测试），秒级，不需要 Docker
+./mvnw verify    # 185 单元 + 82 集成 = 267 个测试，起真实 MySQL 8.4 与 RabbitMQ 4（需 Docker，数分钟）
 ```
 
 | 测试 | 证明的命题 |
@@ -414,7 +438,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 175 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test:coverage（阈值 84/74/79/83）/ build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过；三处 IT flake 的根因已于 2026-11-04 修复，见 [CHANGELOG](CHANGELOG.md)）；Codecov 上传**已验证**（2026-11-05 配置 `CODECOV_TOKEN` 后上传成功）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 185 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（82 个 Testcontainers IT）、package；前端 typecheck / lint / test:coverage（阈值 84/74/79/83）/ build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过；三处 IT flake 的根因已于 2026-11-04 修复，见 [CHANGELOG](CHANGELOG.md)）；Codecov 上传**已验证**（2026-11-05 配置 `CODECOV_TOKEN` 后上传成功）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
@@ -423,11 +447,11 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；首次添加时它曾因 workflow 文件自身触发而失败一次（没有 `sdk/python`），已把自身从触发路径移除；`helm-v0.1.0` tag 又误触发过一次（GitHub 对 tag push 不评估 paths），已加 `branches: ['**']`，任务 P 落地后由 `sdk/python/**` 自动生效 |
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
-175 个测试的 **LINE 29.1%**（824/2833，另有 BRANCH 28.4%），报告在 `target/site/jacoco/`。同一 profile 里的
+185 个测试的 **LINE 30.9%**（936/3029，另有 BRANCH 30.4%），报告在 `target/site/jacoco/`。同一 profile 里的
 `jacoco:check` 把这条基线设成防回退线：LINE 低于 **28%** 时构建立即失败（SDK 自己的 80% 门禁不受影响）。
-这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 73 个 IT 覆盖的路径不计入，所以不要拿它
-和 SDK 的 92.9%（SDK 自己的测试）比较。Codecov 上同一份 `jacoco.xml` 显示 **26.93%**（763/2833，61 条 partial 行不计为 covered）；
-和 JaCoCo 的 29.1% 差在「partial 行算不算覆盖」，不是报告不一致。
+这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 82 个 IT 覆盖的路径不计入，所以不要拿它
+和 SDK 的 92.9%（SDK 自己的测试）比较。Codecov 对同一份 `jacoco.xml` 采用「partial 行不计为 covered」的口径，
+显示的百分比会比 JaCoCo 略低；以 Codecov 页面为准，两者不是报告不一致。
 
 三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`，各 workflow 顶部注释写了原因。
 徽章只有在对应 workflow 至少跑过一次后才会变绿，刚推送时显示 "no status"。
@@ -527,6 +551,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 |---|---|---|
 | `hookflow.delivery.connect-timeout-ms` | 3000 | 连接接收方超时 |
 | `hookflow.delivery.read-timeout-ms` | 10000 | 读超时；慢接收方不能永久占住 worker 线程 |
+| `hookflow.delivery.max-payload-bytes` | 65536 | 单条事件 payload 的上限（按规范化后的 UTF-8 字节计；批量接口逐条校验） |
 | `hookflow.lease.ttl-seconds` | 60 | lease 有效期，必须显著大于 read timeout |
 | `hookflow.relay.batch-size` | **100** | 一次 claim / 一个 confirm 窗口的条数。v0.4 实测（[§22](docs/performance.md#22-relay-batch-size-50--100--200每批的固定成本v04-b8)）：450 入口下 50 只有 357–368/s 且 outbox 涨，100 是 470/s（outbox 平），200 没有进一步收益；900 入口下 50/100/200 发布 337/449/731/s。200 留给追积压（崩溃重复窗口随批大小变宽，见 ADR-0014） |
 | `hookflow.relay.stale-publishing-seconds` | 60 | PUBLISHING 多久视为可疑并重发 |
@@ -578,6 +603,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 - [ADR-0012](docs/adr/0012-demo-console.md) — 为什么演示控制台打进应用（静态页 + 条件 bean），而不是独立前端工程
 - [ADR-0013](docs/adr/0013-batch-ingest.md) — 为什么批量摄入是「一个事务 + 每条自己的幂等键」，而不是请求级事务或部分成功
 - [ADR-0014](docs/adr/0014-batched-relay-publish.md) — 为什么 relay 批量发布是「一批一个 confirm 窗口 + 一次批量 UPDATE」，而不是完全异步确认
+- [ADR-0015](docs/adr/0015-console-login-with-spring-security.md) — 为什么控制台登录用 Spring Security 会话，而公开 API 继续使用手写 API Key
 
 ---
 
@@ -594,6 +620,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
   监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；CI/CD 流水线已就绪（见上文，
   **GHCR 镜像、Helm OCI chart 和 Codecov 上传都已实际验证**）；剩余的是 Python SDK 和 P3 性能
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
+- 幂等键只保证「同键返回同事件」，**不比较 payload**；同一个键配不同 payload 仍返回首次事件的 200，而不是 409（`40901 IDEMPOTENCY_KEY_REUSED` 是保留码，见 [docs/api.md](docs/api.md)）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
 - `stale-publishing-seconds` 一个值两用（崩溃窗口 + worker `defer` 延迟），出现真实误判再拆
@@ -609,7 +636,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)；没有单独打 tag，随 v0.4.0 发布） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；吞吐 41 → 455–470 events/s ✅（B0–B8，[performance.md](docs/performance.md)）；运营控制台 `/ui/` ✅（[`frontend/`](frontend/README.md)，87 个测试）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%，`sdk-v0.1.0` 已发布到 GitHub Packages）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；CI/CD 发布链 ✅（GHCR 镜像、Helm OCI 已验证）。未开始、转入后续版本：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流、Python SDK | ✅ 已发布：tag `v0.4.0`（2026-11-03，[CHANGELOG](CHANGELOG.md)） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；吞吐 41 → 455–470 events/s ✅（B0–B8，[performance.md](docs/performance.md)）；运营控制台 `/ui/` ✅（[`frontend/`](frontend/README.md)，137 个测试）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%，`sdk-v0.1.0` 已发布到 GitHub Packages）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；CI/CD 发布链 ✅（GHCR 镜像、Helm OCI 已验证）。未开始、转入后续版本：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流、Python SDK | ✅ 已发布：tag `v0.4.0`（2026-11-03，[CHANGELOG](CHANGELOG.md)） |
 
 **后续工作与优化计划**：[docs/remaining-plan.md](docs/remaining-plan.md)（任务拆解与验收标准，顺序 P → H）与 [docs/next-steps.md](docs/next-steps.md)（当前基线与环境坑）。
 两份都是给「下一个接手的人」看的，能独立读；[docs/v0.4-plan.md](docs/v0.4-plan.md) 保留 v0.4 的 backlog 原文，其基线数字已过期。
@@ -656,7 +683,7 @@ deploy/kind/
 └── dependencies.yaml  kind 演示用 MySQL/RabbitMQ/Redis/接收方（不是 chart 的一部分）
 
 docs/
-├── adr/             14 条架构决策（含 0009/0010/0011/0012/0013/0014）
+├── adr/             15 条架构决策（含 0009/0010/0011/0012/0013/0014/0015）
 ├── failures/        真实缺陷复盘与演练记录（含 0007、0008）
 ├── perf/            压测原始输出（报告引用的唯一来源）
 ├── demo.md          演示控制台：五个场景各证明什么、为什么可以没有鉴权、没证明什么
@@ -673,6 +700,21 @@ scripts/
 ```
 
 ---
+
+## 贡献
+
+欢迎 issue 和 PR。提交前请在本地跑：
+
+```bash
+./mvnw test                     # 单元测试，不需要 Docker
+./mvnw verify                   # 单元 + 集成测试，需要 Docker
+cd frontend && npm ci
+npm run typecheck && npm run lint && npm test
+```
+
+- 行为变更请附带测试；Bug 修复尽量附一个能复现的用例。
+- 涉及投递语义、状态机或失败分类的改动，请同时更新 `docs/delivery-semantics.md` 或 `docs/adr/`，不要只改代码。
+- 不要提交 `target/`、`logs/`、`frontend/dist/` 等构建产物；它们已在 `.gitignore` 中。
 
 ## License
 

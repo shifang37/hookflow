@@ -67,7 +67,7 @@ README 里那句"broker 丢消息不等于丢投递"在真实环境里成立：R
 | 工具 | 覆盖什么 | 何时用 |
 |---|---|---|
 | `BrokerOutageIT` | broker 不可用 + 恢复的完整语义 | 每次 CI |
-| 本演练 | 真实运营动作（`docker stop` / `docker pause`）在真实多进程部署下的表现 | 发布前、面试演示 |
+| 本演练 | 真实运营动作（`docker stop` / `docker pause`）在真实多进程部署下的表现 | 发布前演练、演示环境 |
 
 ## 6. 遗留
 

@@ -77,7 +77,7 @@
     </dependency>
     <!--
       Boot 4 moved Flyway auto-configuration into its own starter. Adding only
-      flyway-core leaves migrations silently unrun 鈥?tables never get created and
+      flyway-core leaves migrations silently unrun — tables never get created and
       every query fails with "table doesn't exist". flyway-mysql supplies the
       MySQL-specific dialect on top of it.
     -->

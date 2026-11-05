@@ -67,9 +67,11 @@ public class DeliveryService {
             throw ApiException.invalid("from must be before to");
         }
         String normalizedStatus = requireKnownStatus(status);
+        // long: a huge page number must not overflow into a negative OFFSET.
+        long offset = (long) page * size;
         return new Page(
                 deliveryMapper.list(tenantId, eventId, endpointId, normalizedStatus, from, to,
-                        size, page * size),
+                        size, offset),
                 deliveryMapper.count(tenantId, eventId, endpointId, normalizedStatus, from, to));
     }
 

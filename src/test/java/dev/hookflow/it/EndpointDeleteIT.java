@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,21 +72,49 @@ class EndpointDeleteIT extends AbstractIntegrationTest {
 
     @AfterEach
     void cleanUp() {
+        // A worker can claim a PENDING delivery while this method is running and
+        // insert its IN_PROGRESS attempt between the attempt delete and the
+        // delivery delete; that is a foreign-key race, not a product bug. Close it
+        // the same way BatchReplayIT does: stop new claims, remove queued work,
+        // wait for live attempts to settle, then delete in FK order.
+        jdbc.update("""
+                UPDATE delivery
+                   SET status = 'CANCELED'
+                 WHERE tenant_id = ?
+                   AND status IN ('PENDING', 'RETRY_WAIT', 'DELIVERING')
+                """, tenantId);
+        jdbc.update("DELETE FROM outbox WHERE tenant_id = ?", tenantId);
+        awaitNoInProgressAttempts();
+        // A recovery tick that selected an outbox row just before the cancel can
+        // still append one; the second delete leaves no orphans.
+        jdbc.update("DELETE FROM outbox WHERE tenant_id = ?", tenantId);
         jdbc.update("""
                 DELETE a FROM delivery_attempt a
                   JOIN delivery d ON d.id = a.delivery_id
                  WHERE d.tenant_id = ?
-                """, tenantId);
-        jdbc.update("""
-                DELETE o FROM outbox o
-                  JOIN delivery d ON d.id = o.aggregate_id
-                 WHERE o.aggregate_type = 'delivery' AND d.tenant_id = ?
                 """, tenantId);
         jdbc.update("DELETE FROM delivery WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM event WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM endpoint WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM tenant WHERE id = ?", tenantId);
+    }
+
+    private void awaitNoInProgressAttempts() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            Integer inProgress = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM delivery_attempt a
+                      JOIN delivery d ON d.id = a.delivery_id
+                     WHERE d.tenant_id = ? AND a.status = 'IN_PROGRESS'
+                    """, Integer.class, tenantId);
+            if (inProgress == null || inProgress == 0) {
+                return;
+            }
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(25));
+        }
+        throw new IllegalStateException("tenant " + tenantId
+                + " still has an IN_PROGRESS attempt after 10s");
     }
 
     @Test

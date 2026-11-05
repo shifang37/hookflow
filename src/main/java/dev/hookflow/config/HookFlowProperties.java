@@ -65,7 +65,8 @@ public record HookFlowProperties(
     }
 
     /**
-     * @param masterKey base64 encoded 32-byte AES key; injected via env var, never committed
+     * @param masterKey passphrase of at least 32 characters, SHA-256-derived into the
+     *                  AES-256-GCM key; injected via env var, never committed
      * @param keyVersion recorded next to each ciphertext so keys can be rotated
      * @param egress     outbound target policy (SSRF defence)
      */

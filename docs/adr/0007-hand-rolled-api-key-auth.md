@@ -44,4 +44,4 @@ v0.1 用**自建的 `ApiKeyAuthFilter`**（约 60 行），不引入 Spring Secu
 
 - 没有 Spring Security 生态的现成能力（审计、CSRF、session fixation 等）——本项目都不需要
 - 未来迁移要重写鉴权链路，但边界清晰（只有一个过滤器 + 一个 principal），迁移成本可控
-- 面试时可能被问"为什么不用 Spring Security"——这个 ADR 就是答案，而且比"我配了 Security"更能体现判断力
+- 设计评审时可能被问"为什么不用 Spring Security"——这个 ADR 就是答案，而且比"我配了 Security"更能体现判断力

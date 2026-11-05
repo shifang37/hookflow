@@ -97,13 +97,19 @@ public class EndpointTestService {
 
     private void enforceRateLimit(long endpointId) {
         long now = System.currentTimeMillis();
-        Long previous = lastTestAt.putIfAbsent(endpointId, now);
-        if (previous != null && now - previous < MIN_INTERVAL_MS) {
+        // compute() makes the check-and-record atomic. putIfAbsent + put let two
+        // concurrent probes both observe the same old timestamp and both proceed.
+        boolean[] allowed = {false};
+        lastTestAt.compute(endpointId, (id, previous) -> {
+            if (previous != null && now - previous < MIN_INTERVAL_MS) {
+                return previous;
+            }
+            allowed[0] = true;
+            return now;
+        });
+        if (!allowed[0]) {
             throw new ApiException(ErrorCode.RATE_LIMITED,
                     "endpoint test is limited to once per second; try again shortly");
-        }
-        if (previous != null) {
-            lastTestAt.put(endpointId, now);
         }
     }
 }

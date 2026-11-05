@@ -75,7 +75,7 @@ public class HookFlowException extends RuntimeException {
      * Returns the server's symbolic error name.
      *
      * @return the {@code error} field from the response body (for example
-     *         {@code IDEMPOTENCY_KEY_REUSED}), or {@code null}
+     *         {@code ILLEGAL_TRANSITION}), or {@code null}
      */
     public String getErrorName() {
         return errorName;

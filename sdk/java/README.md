@@ -238,8 +238,8 @@ try {
 } catch (HookFlowException e) {
     log.error("status={} code={} error={} requestId={}",
             e.getStatusCode(), e.getCode(), e.getErrorName(), e.getRequestId(), e);
-    if (e.getStatusCode() == 409) {
-        // 同一个幂等键被用于不同 payload —— 这是调用方 bug，重试无用
+    if (e.getStatusCode() == 429) {
+        // 限流或积压：按 Retry-After 退避（RetryPolicy 会处理可重试的 429）
     }
 }
 ```
@@ -255,12 +255,14 @@ try {
 | 400 | 40000 | eventType / payload 非法、批量越界 | ❌ |
 | 401 | 40100 | API Key 缺失 / 无效 / 被撤销 | ❌ |
 | 403 | 40300 | Key 缺 `event:write` scope | ❌ |
-| 409 | 40901 | 幂等键复用但 payload 不同 | ❌ |
 | 429 | 42900 | 租户限流（带 `Retry-After`） | ✅ |
 | 429 | 42902 | 租户积压超水位（带 `Retry-After`） | ✅ |
 | 503 | 50301 | 平台过载（带 `Retry-After`） | ✅ |
 | 5xx | — | 服务端故障 | ✅ |
 | — | — | 网络失败 / 超时 | ✅ |
+
+> 服务端当前**不比较 payload**：同一个幂等键配不同 payload 会返回首次事件的 `200`，而不是
+> `409`。如果调用方需要强校验，应在幂等键中加入内容哈希。
 
 ---
 

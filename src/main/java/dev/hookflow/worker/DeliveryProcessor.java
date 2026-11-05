@@ -3,7 +3,6 @@ package dev.hookflow.worker;
 import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.domain.delivery.Delivery;
 import dev.hookflow.domain.delivery.DeliveryAttempt;
-import dev.hookflow.domain.delivery.DeliveryStatus;
 import dev.hookflow.domain.endpoint.Endpoint;
 import dev.hookflow.domain.event.Event;
 import dev.hookflow.fairness.AdmissionControl;
@@ -130,7 +129,7 @@ public class DeliveryProcessor {
         Event event = eventMapper.findById(delivery.eventId()).orElse(null);
         Endpoint endpoint = endpointMapper.findById(delivery.endpointId()).orElse(null);
         if (event == null || endpoint == null) {
-            settleAbandoned(delivery.id(), message.attemptNo(), "MISSING_PARENT");
+            settleAbandoned(delivery.id(), message.attemptNo(), leaseToken, "MISSING_PARENT");
             return true;
         }
         if (!endpoint.isActive()) {
@@ -229,13 +228,14 @@ public class DeliveryProcessor {
         return true;
     }
 
-    private void settleAbandoned(long deliveryId, int attemptNo, String reason) {
+    private void settleAbandoned(long deliveryId, int attemptNo, String leaseToken, String reason) {
         log.error("Delivery {} has no event/endpoint parent ({}); marking dead", deliveryId, reason);
-        attemptMapper.finish(deliveryId, attemptNo, DeliveryAttempt.FAILED, null, null, reason, 0);
-        Delivery current = deliveryMapper.findById(deliveryId).orElse(null);
-        if (current != null && current.status() == DeliveryStatus.DELIVERING) {
-            // No lease token known here; the lease sweeper will reclaim it.
-            log.warn("Delivery {} left for the lease sweeper", deliveryId);
-        }
+        transactionTemplate.executeWithoutResult(status -> {
+            attemptMapper.finish(deliveryId, attemptNo, DeliveryAttempt.FAILED, null, null, reason, 0);
+            // Terminal, not "leave it to the lease sweeper": a missing parent cannot
+            // appear on a retry. Leaving it DELIVERING made the recovery loop reclaim
+            // and re-enqueue the same row forever.
+            deliveryMapper.markDead(deliveryId, leaseToken, attemptNo, null, reason);
+        });
     }
 }

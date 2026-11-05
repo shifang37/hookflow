@@ -106,12 +106,12 @@ Vite 的转换管线，不用再配 babel/ts-jest 一套独立编译。`npm test
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint（含 react-hooks 规则）
-npm test             # 113 个用例
+npm test             # 137 个用例
 npm run test:coverage # 低于 84/74/79/83（语句/分支/函数/行）直接失败
 ```
 
 覆盖率门禁与后端的 `jacoco:check`（LINE ≥ 28%）对齐：`vite.config.ts` 的 `coverage.thresholds`
-按 2026-11-05 的基线（85.31 / 75.39 / 80.87 / 84.86）留 1–2 个点，真实回退会让 CI 变红。
+按 2026-11-05 的基线（87.61 / 76.51 / 82.67 / 87.3）留 1–2 个点，真实回退会让 CI 变红。
 
 `src/api/client.requests.test.ts` 不走网络：它给 axios 换一个 adapter，记录 axios 拼好的 config，
 再用 `axios.getUri` 跑同一个 params 序列化器，断言 21 个 `api.*` 函数的**方法、路径、请求头、

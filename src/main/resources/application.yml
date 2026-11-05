@@ -24,6 +24,13 @@ spring:
     # Must stay well under the chart's 75s terminationGracePeriodSeconds: this
     # caps how long Spring waits for in-flight work after SIGTERM.
     timeout-per-shutdown-phase: 30s
+  task:
+    scheduling:
+      pool:
+        # @Scheduled defaults to one thread. The relay tick can spend seconds in
+        # broker confirms while retry/lease/retention scans wait behind it; four
+        # threads keep the recovery paths running independently of a busy relay.
+        size: 4
   profiles:
     default: all
   datasource:

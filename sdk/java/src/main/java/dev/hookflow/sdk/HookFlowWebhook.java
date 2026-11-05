@@ -37,7 +37,8 @@ import java.util.function.Function;
  *
  * <h2>Replay protection</h2>
  * <p>Verification does two independent checks: the timestamp must be within the
- * tolerance window and the HMAC must match. Skipping either one is a vulnerability 鈥? * a signature without a window can be replayed forever, and a window without a
+ * tolerance window and the HMAC must match. Skipping either one is a vulnerability —
+ * a signature without a window can be replayed forever, and a window without a
  * signature accepts forged requests.
  */
 public final class HookFlowWebhook {

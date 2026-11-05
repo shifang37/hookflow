@@ -11,6 +11,7 @@ import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -92,33 +93,62 @@ public class HttpDeliverer {
     }
 
     private Outcome attempt(Endpoint endpoint, Event event, Delivery delivery, int attemptNo) {
-        byte[] secret = secretCipher.decrypt(endpoint.secretCipher());
+        byte[] secret;
+        try {
+            secret = secretCipher.decrypt(endpoint.secretCipher());
+        } catch (RuntimeException decryptFailure) {
+            // A wrong/missing master key is a configuration failure, not a receiver
+            // failure. Retrying would never succeed and would keep the delivery in
+            // the recovery loop, so classify it as permanent.
+            return new Outcome(false, false, null, "SECRET_DECRYPT_FAILED",
+                    "endpoint secret cannot be decrypted (master key changed?)", 0);
+        }
         byte[] body = buildBody(event, delivery, attemptNo).getBytes(StandardCharsets.UTF_8);
         long timestamp = Instant.now().getEpochSecond();
         String signature = HmacSigner.sign(secret, event.id(), delivery.id(), timestamp, body);
 
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint.url()))
-                .timeout(Duration.ofMillis(properties.delivery().readTimeoutMs()))
-                .header("Content-Type", "application/json")
-                .header("User-Agent", "HookFlow/0.1")
-                .header("X-HookFlow-Signature", signature)
-                .header("X-HookFlow-Timestamp", Long.toString(timestamp))
-                .header("X-HookFlow-Event-Id", Long.toString(event.id()))
-                .header("X-HookFlow-Delivery-Id", Long.toString(delivery.id()))
-                .header("X-HookFlow-Event-Type", event.eventType())
-                .header("X-HookFlow-Attempt", Integer.toString(attemptNo))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
-        String traceparent = traceContext.currentTraceparent();
-        if (traceparent != null) {
-            builder.header(TraceContextSupport.TRACEPARENT, traceparent);
+        HttpRequest request;
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint.url()))
+                    .timeout(Duration.ofMillis(properties.delivery().readTimeoutMs()))
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", "HookFlow")
+                    .header("X-HookFlow-Signature", signature)
+                    .header("X-HookFlow-Timestamp", Long.toString(timestamp))
+                    .header("X-HookFlow-Event-Id", Long.toString(event.id()))
+                    .header("X-HookFlow-Delivery-Id", Long.toString(delivery.id()))
+                    .header("X-HookFlow-Event-Type", event.eventType())
+                    .header("X-HookFlow-Attempt", Integer.toString(attemptNo))
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+            String traceparent = traceContext.currentTraceparent();
+            if (traceparent != null) {
+                builder.header(TraceContextSupport.TRACEPARENT, traceparent);
+            }
+            request = builder.build();
+        } catch (IllegalArgumentException e) {
+            // Malformed URI (or an illegal header value) that slipped past validation.
+            // This must be classified here, not escape and leave the attempt row open.
+            return new Outcome(false, false, null, "INVALID_URL", truncate(e.getMessage()), 0);
         }
-        HttpRequest request = builder.build();
 
         long startNanos = System.nanoTime();
         try {
-            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            // Consume the body in chunks and keep only the preview budget. Unlike
+            // ofByteArray(), a receiver returning gigabytes cannot make the worker
+            // buffer all of it; unlike ofInputStream(), the exchange is not complete
+            // until the body is consumed, so the request/read timeout still applies.
+            int previewLimit = Math.max(0, properties.delivery().maxResponsePreviewBytes());
+            ByteArrayOutputStream preview = new ByteArrayOutputStream();
+            HttpResponse<Void> response = httpClient.send(request,
+                    HttpResponse.BodyHandlers.ofByteArrayConsumer(chunk -> chunk.ifPresent(bytes -> {
+                        int remaining = previewLimit - preview.size();
+                        if (remaining > 0) {
+                            preview.write(bytes, 0, Math.min(remaining, bytes.length));
+                        }
+                    })));
             int durationMs = elapsedMs(startNanos);
-            return classify(response.statusCode(), response.body(), durationMs);
+            return classify(response.statusCode(),
+                    new String(preview.toByteArray(), StandardCharsets.UTF_8), durationMs);
         } catch (HttpTimeoutException e) {
             return new Outcome(false, true, null, "TIMEOUT", truncate(e.getMessage()), elapsedMs(startNanos));
         } catch (IOException e) {
@@ -132,8 +162,7 @@ public class HttpDeliverer {
         }
     }
 
-    private Outcome classify(int statusCode, byte[] responseBody, int durationMs) {
-        String preview = truncate(new String(responseBody, StandardCharsets.UTF_8));
+    private Outcome classify(int statusCode, String preview, int durationMs) {
         if (statusCode >= 200 && statusCode < 300) {
             return new Outcome(true, false, statusCode, null, preview, durationMs);
         }

@@ -119,7 +119,7 @@ public interface DeliveryMapper {
                         @Param("fromTime") java.time.LocalDateTime fromTime,
                         @Param("toTime") java.time.LocalDateTime toTime,
                         @Param("limit") int limit,
-                        @Param("offset") int offset);
+                        @Param("offset") long offset);
 
     @Select("<script>"
             + "SELECT COUNT(*) FROM delivery WHERE tenant_id = #{tenantId}"
@@ -141,7 +141,7 @@ public interface DeliveryMapper {
      * it to look up what they just created; all of them pass {@code null} for the
      * filters this shorthand drops.
      */
-    default List<Delivery> list(long tenantId, Long eventId, String status, int limit, int offset) {
+    default List<Delivery> list(long tenantId, Long eventId, String status, int limit, long offset) {
         return list(tenantId, eventId, null, status, null, null, limit, offset);
     }
 

@@ -2,17 +2,17 @@
 
 ## 文档目的
 
-本文档面向**校招/实习求职场景**，列出 HookFlow 项目的优化方向、技术选型和实施计划。
-当前项目已具备**生产级后端架构**（后端 248 个测试、14 条 ADR、完整的故障恢复机制），
+本文档面向**技术展示与后续迭代**，列出 HookFlow 项目的优化方向、技术选型和实施计划。
+当前项目已具备**生产级后端架构**（后端 267 个测试、15 条 ADR、完整的故障恢复机制），
 并在前端控制台、Java SDK、K8s 和监控上完成了大部分产品化工作。
 
 > **状态同步（2026-11-03）**：以下勾选已按 2026-10-30 的 `master` 复核，2026-11-02 收掉了控制台的
 > 三个小尾巴（见 [remaining-plan.md §6](remaining-plan.md)），2026-11-03 补上了 broker 丢消息恢复路径的
 > `DeliveryRecoveryIT`。完成度速览见下一节。当前基线：
-> 后端 175 单测 + 73 集成、前端 113、Java SDK 66，共 427 个测试；14 条 ADR。
+> 后端 185 单测 + 82 集成、前端 137、Java SDK 66，共 470 个测试；15 条 ADR。
 
 **核心原则**：
-- ✅ 优先提升**可视化**和**易用性**（面试时更容易展示）
+- ✅ 优先提升**可视化**和**易用性**（演示时更容易看到效果）
 - ✅ 选择**主流技术栈**（证明技术广度）
 - ✅ 每个优化都要有**可衡量的目标**（避免过度设计）
 - ❌ 不追求完美，保持项目的**核心优势**（系统设计深度）
@@ -56,7 +56,7 @@
 > **状态（2026-10-30）**：基本完成。运营控制台在 [`frontend/`](../frontend/)，
 > React 18 + TypeScript + Vite + Ant Design + React Query + Zustand + Recharts；
 > 生产构建由后端从 `/ui/` 提供。5 个页面（事件流 / 投递 / Endpoints / 租户 / 系统监控）
-> 都接真实接口，事件流 2s 轮询，事件流与投递页可按时间范围筛选，前端 87 个测试、语句覆盖约 71%。
+> 都接真实接口，事件流 2s 轮询，事件流与投递页可按时间范围筛选，前端 137 个测试。
 > 移动端按 390×844 视口验收（无整页横向滚动、侧栏折叠、Drawer 不超宽），见
 > [mobile-acceptance.md](mobile-acceptance.md)；真机浏览器未测，原生 App 不在范围内。
 > 单条投递详情抽屉已接（attempt 历史走 `GET /v1/deliveries/{id}`）。
@@ -1702,7 +1702,7 @@ helm uninstall hookflow --namespace hookflow
 
 - Prometheus 指标已暴露，但没有可视化
 - 无法直观看到系统运行状态
-- 面试时难以展示系统实时表现
+- 演示时难以展示系统实时表现
 
 ### 优化目标
 
@@ -1848,11 +1848,11 @@ hookflow_outbox_backlog
 | Java SDK | `.github/workflows/sdk.yml`（发布：`sdk-publish.yml`） |
 | Python SDK（预置） | `.github/workflows/python-sdk.yml`；`sdk/python/` 还不存在，路径过滤使它现在不会运行 |
 
-本机能验证的是：`./mvnw -o -Pcoverage test`（175 个通过，LINE 29.1%，仅单测、`jacoco:check` 门禁 ≥ 28%）、
-`helm package`/`helm lint`、前端 113 个测试与 `npm run build:backend`。
+本机能验证的是：`./mvnw -o -Pcoverage test`（185 个通过，LINE 30.9%，936/3029，仅单测、`jacoco:check` 门禁 ≥ 28%）、
+`helm package`/`helm lint`、前端 137 个测试与 `npm run build:backend`。
 `docker build` 在本机卡在容器内的 Maven `dependency:go-offline`（网络），本地镜像没有构建完成；
 但 **GitHub Actions 的 `docker` run #8 已经成功构建并推送 GHCR**。
-Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；只剩 Codecov 上传未验证，本地无法伪造。
+Helm OCI 也已在 Actions 上验证（`helm-v0.1.0`）；Codecov 上传已于 2026-11-05 配置 `CODECOV_TOKEN` 后验证。
 
 ---
 
@@ -2013,10 +2013,10 @@ spring:
 - ✅ P1 Java SDK（证明 SDK 设计能力；尚未发布，演示前先 `mvn -f sdk/java/pom.xml install`）
 - ✅ P1 监控面板（证明运维意识）
 
-### 面试时如何展示
+### 不同关注点的展示路径
 
-1. **全栈岗**：重点展示 React 前端 + 管理后台
-2. **后端岗**：重点展示 K8s 部署 + 监控 + 性能优化
-3. **基础架构岗**：重点展示 K8s + CI/CD + 性能调优
+1. **全栈关注点**：重点展示 React 前端 + 管理后台
+2. **后端关注点**：重点展示 K8s 部署 + 监控 + 性能优化
+3. **基础架构关注点**：重点展示 K8s + CI/CD + 性能调优
 
-祝求职顺利！🚀
+祝后续迭代顺利！🚀

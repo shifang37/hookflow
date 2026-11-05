@@ -15,7 +15,13 @@ public enum ErrorCode {
     METHOD_NOT_ALLOWED(40500, HttpStatus.METHOD_NOT_ALLOWED, "Method not allowed"),
     PAYLOAD_TOO_LARGE(41300, HttpStatus.CONTENT_TOO_LARGE, "Payload exceeds the size limit"),
     UNSUPPORTED_MEDIA_TYPE(41500, HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported media type"),
+    /**
+     * Reserved: this version does not compare payloads, so it never emits this code
+     * (same key + different payload still returns the original event with 200).
+     * Documented as reserved in {@code docs/api.md}; see ADR-0013.
+     */
     IDEMPOTENCY_KEY_REUSED(40901, HttpStatus.CONFLICT, "Idempotency key already used with a different payload"),
+    /** Reserved: a paused endpoint affects fan-out, not the HTTP response of an ingest. */
     ENDPOINT_PAUSED(40902, HttpStatus.CONFLICT, "Endpoint is paused"),
     ILLEGAL_TRANSITION(40903, HttpStatus.CONFLICT, "Delivery is not in a state that allows this operation"),
     /**

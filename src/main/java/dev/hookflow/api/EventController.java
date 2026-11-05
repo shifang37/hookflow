@@ -9,6 +9,7 @@ import dev.hookflow.common.auth.ApiKeyPrincipal;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.common.web.PageResponse;
+import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.domain.event.Event;
 import dev.hookflow.domain.tenant.Tenant;
 import dev.hookflow.ratelimit.TenantRateLimiter;
@@ -34,6 +35,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.ObjectMapper;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +77,7 @@ public class EventController {
     private final dev.hookflow.backpressure.BacklogGate backlogGate;
     private final ObjectMapper objectMapper;
     private final ReportService reportService;
+    private final int maxPayloadBytes;
 
     public EventController(EventIngestService ingestService,
                            DeliveryService deliveryService,
@@ -82,7 +85,8 @@ public class EventController {
                            TenantRateLimiter rateLimiter,
                            dev.hookflow.backpressure.BacklogGate backlogGate,
                            ObjectMapper objectMapper,
-                           ReportService reportService) {
+                           ReportService reportService,
+                           HookFlowProperties properties) {
         this.ingestService = ingestService;
         this.deliveryService = deliveryService;
         this.tenantService = tenantService;
@@ -90,6 +94,7 @@ public class EventController {
         this.backlogGate = backlogGate;
         this.objectMapper = objectMapper;
         this.reportService = reportService;
+        this.maxPayloadBytes = properties.delivery().maxPayloadBytes();
     }
 
     /**
@@ -125,13 +130,10 @@ public class EventController {
 
         long tenantId = ApiKeyPrincipal.Context.requireTenantId();
         Tenant tenant = tenantService.requireActive(tenantId);
-        // Order matters: the rate limiter is a Redis counter (cheap, per-second
-        // quota), the backlog gate is a cached MySQL count (capacity). Rejecting on
-        // quota first keeps the capacity check off the hot path of a tenant that is
-        // already being rate limited.
-        rateLimiter.acquire(tenantId, tenant.rateLimit());
-        backlogGate.check(tenantId);
 
+        // Validate before spending quota: a malformed request must not consume a
+        // rate-limit permit or a backlog slot. Otherwise a client could exhaust its
+        // window (and everyone else's capacity) with requests that would be 400s.
         String eventType = request.eventType();
         if (eventType == null || !EVENT_TYPE.matcher(eventType).matches()) {
             throw dev.hookflow.common.error.ApiException.invalid(
@@ -149,6 +151,14 @@ public class EventController {
         // on the delivery path embeds this string verbatim, so every retry of this
         // event sends identical bytes.
         String payloadJson = objectMapper.writeValueAsString(request.payload());
+        requirePayloadSize(-1, payloadJson);
+
+        // Order matters: the rate limiter is a Redis counter (cheap, per-second
+        // quota), the backlog gate is a cached MySQL count (capacity). Rejecting on
+        // quota first keeps the capacity check off the hot path of a tenant that is
+        // already being rate limited.
+        rateLimiter.acquire(tenantId, tenant.rateLimit());
+        backlogGate.check(tenantId);
 
         EventIngestService.IngestResult result =
                 ingestService.ingest(tenantId, eventType, payloadJson, idempotencyKey);
@@ -208,10 +218,6 @@ public class EventController {
             throw ApiException.invalid("events must contain 1-" + MAX_BATCH_EVENTS + " items");
         }
 
-        // Same order as the single-event path: quota first, capacity second.
-        rateLimiter.acquire(tenantId, tenant.rateLimit(), items.size());
-        backlogGate.check(tenantId, items.size());
-
         List<EventIngestService.BatchItem> batch = new ArrayList<>(items.size());
         for (int index = 0; index < items.size(); index++) {
             CreateEventBatchItem item = items.get(index);
@@ -231,9 +237,15 @@ public class EventController {
                 throw ApiException.invalid("events[" + index
                         + "].idempotencyKey must be 1-255 characters");
             }
-            batch.add(new EventIngestService.BatchItem(eventType,
-                    objectMapper.writeValueAsString(item.payload()), idempotencyKey));
+            String payloadJson = objectMapper.writeValueAsString(item.payload());
+            requirePayloadSize(index, payloadJson);
+            batch.add(new EventIngestService.BatchItem(eventType, payloadJson, idempotencyKey));
         }
+
+        // Only a fully valid batch spends quota/capacity. Counting first would let a
+        // client burn its window with malformed requests that never create an event.
+        rateLimiter.acquire(tenantId, tenant.rateLimit(), items.size());
+        backlogGate.check(tenantId, items.size());
 
         List<EventIngestService.BatchResult> results;
         try {
@@ -260,5 +272,22 @@ public class EventController {
                         result.idempotentReplay()))
                 .toList();
         return ResponseEntity.status(createdAny ? HttpStatus.ACCEPTED : HttpStatus.OK).body(body);
+    }
+
+    /**
+     * The configured payload ceiling is enforced here, not only in the SDK. Without
+     * it a client could store and then deliver an arbitrarily large JSON document
+     * through a path the SDK never sees (curl, another language, a compromised app).
+     */
+    private void requirePayloadSize(int index, String payloadJson) {
+        if (maxPayloadBytes <= 0) {
+            return;
+        }
+        int bytes = payloadJson.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > maxPayloadBytes) {
+            String field = index < 0 ? "payload" : "events[" + index + "].payload";
+            throw new ApiException(ErrorCode.PAYLOAD_TOO_LARGE,
+                    field + " exceeds " + maxPayloadBytes + " bytes (" + bytes + ")");
+        }
     }
 }

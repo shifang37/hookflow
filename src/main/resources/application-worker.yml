@@ -8,8 +8,13 @@ spring:
     listener:
       simple:
         prefetch: ${MQ_PREFETCH:8}
-        concurrency: 2
-        max-concurrency: 8
+        # Same defaults as application.yml. This file used to pin 2/8 from the
+        # pre-v0.4 benchmark, which meant the production `worker` profile silently
+        # ran a different (and much slower) configuration than the `all` profile
+        # the performance numbers were measured on. Keep both roles aligned; use
+        # MQ_CONCURRENCY / MQ_MAX_CONCURRENCY to tune a specific deployment.
+        concurrency: ${MQ_CONCURRENCY:32}
+        max-concurrency: ${MQ_MAX_CONCURRENCY:32}
 hookflow:
   lease:
     ttl-seconds: 60

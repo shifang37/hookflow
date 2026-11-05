@@ -10,9 +10,9 @@
 > K 于 2026-10-30 落在 [`helm/hookflow/`](../helm/hookflow/)（kind 实测滚动更新 / 杀 worker / HPA）；
 > C 于 2026-10-30 落在 `.github/workflows/`（JaCoCo 覆盖率、Codecov、GHCR 与 Helm OCI 发布、README 实时徽章）；
 > U 于 2026-11-02 完成（投递详情、租户停用/启用、Endpoint 测试发送、签名提示、时间范围筛选，见 §6）。
-> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（三处 flake 根因已于 2026-11-04 修复）；
+> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #22 绿（三处 flake 根因已于 2026-11-04 修复）；
 > `helm-v0.1.0` 的 `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`；
-> Codecov 上传已于 2026-11-05 验证（配置 `CODECOV_TOKEN`，覆盖率 26.93%）。
+> Codecov 上传已于 2026-11-05 验证（配置 `CODECOV_TOKEN`；覆盖率以 Codecov 页面为准）。
 > 下一步是 **P（Python SDK）**，之后 **H（P3 性能）**。
 > **A3 备份恢复演练也已完成**（2026-11-03）：`scripts/backup-restore.ps1` 把 `mysqldump --single-transaction` 的备份恢复到
 > 一台空 `mysql:8.4`，断言行数与状态分布全等，并在清空 broker 队列的前提下靠三条恢复路径让全部在途投递收敛；
@@ -30,11 +30,11 @@
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **175 个通过** | `.\mvnw.cmd -o test` |
-| 后端单测覆盖率 | **LINE 29.1%**（824/2833），`jacoco:check` 防回退线 ≥ 28% | `.\mvnw.cmd -o -Pcoverage test` |
-| 后端集成测试 | **73 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
-| 前端单测 | **113 个通过**（17 个文件，~63s） | `cd frontend; npm test` |
-| 前端覆盖率 | 语句 85.31% / 分支 75.39% / 函数 80.87% / 行 84.86%，~63s（Vitest 4 的 V8 口径）；`queries.ts` 四项均 100% | `npm run test:coverage` |
+| 后端单测 | **185 个通过** | `.\mvnw.cmd -o test` |
+| 后端单测覆盖率 | **LINE 30.9%**（936/3029）、BRANCH 30.4%，`jacoco:check` 防回退线 ≥ 28% | `.\mvnw.cmd -o -Pcoverage test` |
+| 后端集成测试 | **82 个通过**（真 MySQL 8.4 + RabbitMQ 4，Testcontainers） | `.\mvnw.cmd -o verify`（需 Docker Desktop） |
+| 前端单测 | **137 个通过**（23 个文件，~60s） | `cd frontend; npm test` |
+| 前端覆盖率 | 语句 87.61% / 分支 76.51% / 函数 82.67% / 行 87.3%，~2min（Vitest 4 的 V8 口径）；`queries.ts` 四项均 100% | `npm run test:coverage` |
 | Java SDK 单测 | **66 个通过**，JaCoCo LINE **92.9%**（390/420） | `.\mvnw.cmd -f sdk/java/pom.xml verify` |
 | 监控栈 | Prometheus + Grafana，**3 个面板 / 2 条告警** | `docker compose --profile monitoring up -d`（详见 [monitoring.md](monitoring.md)） |
 | Helm chart | `helm lint` dev/prod 0 failed；kind 上三角色 Ready | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
@@ -563,9 +563,9 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/)，66 tests，LINE 92.9% | J（已完成） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)，kind 实测滚动/杀 worker/HPA | K（已完成） |
 | P1 Grafana | ✅ 3 个面板 + 2 条告警，两个指标缺口已补（[monitoring.md](monitoring.md)） | G（已完成） |
-| P2 CI/CD | ✅ 基本完成：JaCoCo 单测覆盖率 + Codecov 步骤、`docker.yml`、`helm-publish.yml`、实时徽章、`python-sdk.yml` 预置；**GHCR 与 Helm OCI 已验证，Codecov 上传未验证** | C（已完成） |
+| P2 CI/CD | ✅ 基本完成：JaCoCo 单测覆盖率 + Codecov 步骤、`docker.yml`、`helm-publish.yml`、实时徽章、`python-sdk.yml` 预置；**GHCR、Helm OCI 与 Codecov 上传均已验证** | C（已完成） |
 | P2 Python SDK | ❌ | P |
 | P3 性能（2000/s） | ◐（5 轮优化 + 报告，目标未达） | H |
 
-> 完成 J 之后，这个项目的"面试三件套"（前端可视化 + Java SDK + 监控面板）就只剩面板了；
+> 完成 J 之后，这个项目的"展示三件套"（前端可视化 + Java SDK + 监控面板）就只剩面板了；
 > 如果时间紧，建议顺序改成 **J → G → K**（G 比 K 便宜，而且 K 的 HPA 依赖 G 的指标）。

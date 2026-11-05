@@ -45,9 +45,9 @@ curl -b cookies.txt -s localhost:8080/v1/admin/tenants
 
 ```json
 {
-  "code": 40901,
-  "error": "IDEMPOTENCY_KEY_REUSED",
-  "message": "Idempotency key already used with a different payload",
+  "code": 40903,
+  "error": "ILLEGAL_TRANSITION",
+  "message": "Only DEAD deliveries can be replayed (current: SUCCEEDED)",
   "requestId": "3f2a1b9c-...",
   "timestamp": "2026-10-22T05:11:22.481Z"
 }
@@ -61,8 +61,6 @@ curl -b cookies.txt -s localhost:8080/v1/admin/tenants
 | 40400 | `NOT_FOUND` | 404 | 资源不存在（含跨租户访问） |
 | 40500 | `METHOD_NOT_ALLOWED` | 405 | — |
 | 41300 | `PAYLOAD_TOO_LARGE` | 413 | payload 超限 |
-| 40901 | `IDEMPOTENCY_KEY_REUSED` | 409 | 幂等键复用 |
-| 40902 | `ENDPOINT_PAUSED` | 409 | endpoint 已暂停 |
 | 40903 | `ILLEGAL_TRANSITION` | 409 | 状态不允许该操作（如重放非 DEAD 的投递） |
 | 40904 | `ALREADY_EXISTS` | 409 | 唯一约束冲突：租户名重复，或同一租户下重复的回调地址 |
 | 42900 | `RATE_LIMITED` | 429 | 超出租户速率（**按事件数计**，一批 500 条要 500 个配额） |
@@ -70,6 +68,11 @@ curl -b cookies.txt -s localhost:8080/v1/admin/tenants
 | 50000 | `INTERNAL` | 500 | 未预期错误（细节只在日志里，用 requestId 查） |
 | 50300 | `DEPENDENCY_UNAVAILABLE` | 503 | 依赖不可用（限流 fail-closed 时的 Redis；或批量接口整批未提交） |
 | 50301 | `OVER_CAPACITY` | 503 | 平台整体过载，正在降载，带 `Retry-After` |
+
+> `40901 IDEMPOTENCY_KEY_REUSED` 与 `40902 ENDPOINT_PAUSED` 是**保留错误码，当前版本不会返回**：
+> 同一个幂等键配不同 payload 仍会按首次事件返回 `200`（payload 比对尚未实现，见 ADR-0013）；
+> 暂停 endpoint 只影响后续 fan-out，暂停前已入队的投递会被取消，投递记录用 `ENDPOINT_PAUSED`
+> 作为错误类，而不是 HTTP 409。
 
 ---
 
@@ -380,9 +383,12 @@ curl -X POST localhost:8080/v1/events \
 
 - `Idempotency-Key` 必填，1–255 字符，租户范围内唯一
 - `eventType` 必须匹配 `[A-Za-z0-9._-]{1,128}`（限制字符集是为了能安全地嵌进投递的 JSON 信封而不需要转义）
-- `payload` 必填，任意 JSON
+- `payload` 必填，任意 JSON；规范化后的 UTF-8 字节数不得超过 `hookflow.delivery.max-payload-bytes`（默认 64 KiB），超限返回 `413` `PAYLOAD_TOO_LARGE`
 
 **重试建议**：网络错误时用**同一个** `Idempotency-Key` 重试，不会产生重复事件；返回 200 表示"上次已经成功了"。
+
+> 当前版本**不比较 payload**：同一个 `Idempotency-Key` 配不同 payload 仍返回首次事件的 200，
+> 不会返回 409。需要强校验的调用方应在自己的幂等键里带上内容哈希。
 
 **响应头**：
 
@@ -500,7 +506,7 @@ curl -X POST localhost:8080/v1/events/batch \
 - 每条都要自己的 `idempotencyKey`（1–255 字符，租户内唯一）。**没有请求级 `Idempotency-Key` 头**：一批是一个事件集合，不是一个可以整体重放的请求
 - 部分重复**不是错误**：预先存在的键按条返回 `replay:true` + 原 `eventId`，其余照常写入。同一批内重复的键解析到**第一次出现**创建的那个事件
 - 整批失败（如 MySQL 不可用）返回 `503` `DEPENDENCY_UNAVAILABLE`：一个事务，一条都没提交，所以**用同一批幂等键原样重试是安全的**
-- 校验错误（`eventType` 不合法、`payload` 缺失、键超长）返回 `400`，错误消息里带 `events[i]` 下标
+- 校验错误（`eventType` 不合法、`payload` 缺失、键超长）返回 `400`，错误消息里带 `events[i]` 下标；单条 payload 超过 `max-payload-bytes` 返回 `413`，同样带下标
 
 **限流与降载按条数计，不按请求数**：
 

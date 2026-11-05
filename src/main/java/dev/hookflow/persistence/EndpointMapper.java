@@ -65,7 +65,7 @@ public interface EndpointMapper {
             """)
     List<Endpoint> listByTenant(@Param("tenantId") long tenantId,
                                 @Param("limit") int limit,
-                                @Param("offset") int offset);
+                                @Param("offset") long offset);
 
     @Select("SELECT COUNT(*) FROM endpoint WHERE tenant_id = #{tenantId} AND status <> 'DELETED'")
     long countByTenant(@Param("tenantId") long tenantId);

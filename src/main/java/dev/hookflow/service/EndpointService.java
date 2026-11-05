@@ -107,7 +107,7 @@ public class EndpointService {
     }
 
     public List<Endpoint> list(long tenantId, int page, int size) {
-        return endpointMapper.listByTenant(tenantId, size, page * size);
+        return endpointMapper.listByTenant(tenantId, size, (long) page * size);
     }
 
     public long count(long tenantId) {

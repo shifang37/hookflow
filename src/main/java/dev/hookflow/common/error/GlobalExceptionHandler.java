@@ -10,8 +10,10 @@ import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
@@ -64,6 +66,23 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleUnreadable(HttpMessageNotReadableException e, HttpServletRequest request) {
         return badRequest("Request body is not valid JSON", request);
+    }
+
+    /**
+     * A query/path parameter that Spring could not convert (for example
+     * {@code ?page=abc} or {@code ?from=not-a-date}). Without this handler the
+     * generic {@code Exception} branch turns a caller mistake into a 500.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleTypeMismatch(MethodArgumentTypeMismatchException e,
+                                                       HttpServletRequest request) {
+        return badRequest("Invalid value for parameter '" + e.getName() + "'", request);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiError> handleMissingParameter(MissingServletRequestParameterException e,
+                                                           HttpServletRequest request) {
+        return badRequest("Missing required parameter: " + e.getParameterName(), request);
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

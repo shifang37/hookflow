@@ -23,14 +23,14 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 
 | 项 | 结果 | 怎么复现 |
 |---|---|---|
-| 后端单测 | **175 个通过** | `./mvnw -o test` |
-| 后端单测覆盖率 | **LINE 29.1%**（824/2833）、BRANCH 28.4%，仅单测；IT 不采集；`jacoco:check` 门禁 LINE ≥ 28% | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
-| 后端集成测试 | **73 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
-| 前端单测 | **113 个通过**（17 个文件），~63s | `cd frontend && npm test` |
-| 前端覆盖率 | 语句 85.31% / 分支 75.39% / 函数 80.87% / 行 84.86%，~63s（Vitest 4 的 V8 口径，比 3.x 更严格）；`queries.ts` 四项均 100%；`vite.config.ts` 的 `coverage.thresholds` = 84/74/79/83，低于即失败 | `npm run test:coverage` |
+| 后端单测 | **185 个通过** | `./mvnw -o test` |
+| 后端单测覆盖率 | **LINE 30.9%**（936/3029）、BRANCH 30.4%，仅单测；IT 不采集；`jacoco:check` 门禁 LINE ≥ 28% | `./mvnw -o -Pcoverage test`，报告在 `target/site/jacoco/` |
+| 后端集成测试 | **82 个通过**（真 MySQL 8.4 + RabbitMQ，Testcontainers） | `./mvnw -o verify`（需 Docker） |
+| 前端单测 | **137 个通过**（23 个文件），~60s | `cd frontend && npm test` |
+| 前端覆盖率 | 语句 87.61% / 分支 76.51% / 函数 82.67% / 行 87.3%，~2min（Vitest 4 的 V8 口径，比 3.x 更严格）；`queries.ts` 四项均 100%；`vite.config.ts` 的 `coverage.thresholds` = 84/74/79/83，低于即失败 | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
-| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #20 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；Codecov 上传也已验证（2026-11-05，`CODECOV_TOKEN`） | `.github/workflows/` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #22 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；Codecov 上传也已验证（2026-11-05，`CODECOV_TOKEN`） | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 

@@ -100,7 +100,7 @@ public interface ReportMapper {
                                              @Param("fromTime") LocalDateTime fromTime,
                                              @Param("toTime") LocalDateTime toTime,
                                              @Param("limit") int limit,
-                                             @Param("offset") int offset);
+                                             @Param("offset") long offset);
 
     @Select("""
             <script>
@@ -242,7 +242,7 @@ public interface ReportMapper {
             """)
     List<TenantRow> listTenants(@Param("search") String search,
                                 @Param("limit") int limit,
-                                @Param("offset") int offset);
+                                @Param("offset") long offset);
 
     @Select("""
             <script>
