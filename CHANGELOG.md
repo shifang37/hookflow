@@ -33,6 +33,8 @@
   `hookflow.db.lock_conflict{operation=event.ingest}` 计数为 1；单测总数 174 → **175**，LINE 覆盖率 28.3% → **29.1%**
 - **Codecov 上传已启用并验证**：配置 `CODECOV_TOKEN` 后，2026-11-05 的 `ci` run 上传 `target/site/jacoco/jacoco.xml` 成功；
   Codecov 提交报告 LINE **26.93%**（763/2833，61 条 partial 未计入），与 JaCoCo 的 29.1% 差异来自 partial 行的口径
+- 前端补覆盖率防回退门禁：`frontend/vite.config.ts` 的 `coverage.thresholds` 设为语句 **84** / 分支 **74** / 函数 **79** / 行 **83**
+  （2026-11-05 基线 85.31 / 75.39 / 80.87 / 84.86），`npm run test:coverage` 低于阈值即失败，与后端 `jacoco:check` 对齐
 
 ## [0.4.0] — 2026-11-03
 

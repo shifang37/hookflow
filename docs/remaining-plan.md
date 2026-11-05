@@ -5,16 +5,15 @@
 > 路线图本身只记"想做什么"，现状与已完成项见 [next-steps.md](next-steps.md) 与本文 §1。
 >
 > **执行顺序：J（Java SDK）→ K（K8s/Helm）→ G（Grafana）→ C（CI/CD 补完）→ U（控制台小缺口）→ P（Python SDK）→ H（P3 性能）**。
-> **J 已完成**（2026-10-29，代码在 [`sdk/java/`](../sdk/java/)）。
-> **G 也已完成**（2026-10-29，见 [`docs/monitoring.md`](monitoring.md)）：3 个面板、2 条告警、两个指标缺口已补，告警实测触发。
-> **K 也已完成**（2026-10-30，见 [`helm/hookflow/`](../helm/hookflow/)）：kind 实测滚动更新/杀 worker/HPA。
-> **C 也已完成**（2026-10-30，见 `.github/workflows/`）：JaCoCo 单测覆盖率、Codecov 步骤、
-> GHCR 镜像与 Helm OCI 发布 workflow、README 实时徽章、Python SDK job 预置。
-> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（build 一次
-> `BatchReplayIT.cleanUp` flake 后 `gh run rerun --failed` 通过；三处 flake 根因已于 2026-11-04 修复）；`helm-v0.1.0` 的
-> `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`。
-> **未验证**：Helm OCI 发布、Codecov 上传（没有 token）。
-> 下一步是 **U（控制台小缺口）**。
+> **J / K / G / C / U 均已完成**：J 于 2026-10-29 落在 [`sdk/java/`](../sdk/java/)（`0.1.0` 已于 2026-11-05 发布到 GitHub Packages）；
+> G 于 2026-10-29 落在 [monitoring.md](monitoring.md)（3 个面板、2 条告警，告警实测触发）；
+> K 于 2026-10-30 落在 [`helm/hookflow/`](../helm/hookflow/)（kind 实测滚动更新 / 杀 worker / HPA）；
+> C 于 2026-10-30 落在 `.github/workflows/`（JaCoCo 覆盖率、Codecov、GHCR 与 Helm OCI 发布、README 实时徽章）；
+> U 于 2026-11-02 完成（投递详情、租户停用/启用、Endpoint 测试发送、签名提示、时间范围筛选，见 §6）。
+> **已在 Actions 验证**：`docker` run #1 成功构建并推送 GHCR；`ci` run #20 绿（三处 flake 根因已于 2026-11-04 修复）；
+> `helm-v0.1.0` 的 `helm-publish` run #1 成功，chart 已推到 `oci://ghcr.io/shifang37/charts`；
+> Codecov 上传已于 2026-11-05 验证（配置 `CODECOV_TOKEN`，覆盖率 26.93%）。
+> 下一步是 **P（Python SDK）**，之后 **H（P3 性能）**。
 > **A3 备份恢复演练也已完成**（2026-11-03）：`scripts/backup-restore.ps1` 把 `mysqldump --single-transaction` 的备份恢复到
 > 一台空 `mysql:8.4`，断言行数与状态分布全等，并在清空 broker 队列的前提下靠三条恢复路径让全部在途投递收敛；
 > 记录见 [failures/0008](failures/0008-backup-restore-drill.md)，运维检查清单见 [operations.md §10](operations.md)。
@@ -54,7 +53,7 @@
 ## 2. 任务 J：Java SDK（第一步，2–3 天）
 
 > **状态：已完成（2026-10-29）**。实现、测试与 README 见 [`sdk/java/`](../sdk/java/)；
-> 验收清单在 J.8，两处与计划的偏差（重试不用 Failsafe、未实际发布）在 J.2 / J.7 注明。
+> 验收清单在 J.8，与计划的两处偏差（重试不用 Failsafe、发布走 GitHub Packages）在 J.2 / J.7 注明。
 
 ### J.0 开工前先读这 4 个文件（约 15 分钟）
 
@@ -79,9 +78,9 @@
 - [x] 完整 JavaDoc + README + 可运行示例
 - [x] 单元测试覆盖率 ≥ 80%（JaCoCo LINE **92.9%**，gate 已开 `haltOnFailure`）
 - [x] 构建产物可被其他项目引用（`mvn install` + `$env:TEMP` 下的独立项目跑通 `sendEvent`）
-- [ ] 发布到 Maven Central / JitPack —— **本计划改为 GitHub Packages**（原因见 J.2）。
-      tag 触发的发布 workflow 已写（`.github/workflows/sdk-publish.yml`），但**尚未实际 deploy**，
-      README 已标注「未发布」；本版本只能 `mvn install` 后本地引用
+- [ ] 发布到 Maven Central / JitPack —— **本计划改为 GitHub Packages**（原因见 J.2），且已落地：
+      2026-11-05 以 tag `sdk-v0.1.0` 发布 `dev.hookflow:hookflow-java-sdk:0.1.0`，
+      `.github/workflows/sdk-publish.yml` run #1 成功
 
 ### J.2 位置与构建决策（先读，避免走错）
 
@@ -313,8 +312,8 @@ if (!v.valid()) log.warn("webhook rejected: {}", v.reason());
   `javadoc:javadoc`，上传 `target/site/jacoco`。
 - 发布 workflow：`.github/workflows/sdk-publish.yml`，`on: push: tags: ['sdk-v*']` →
   `mvn deploy` 到 GitHub Packages（`distributionManagement` + `settings.xml` 用 `GITHUB_TOKEN`，
-  权限 `packages: write`）。**尚未实际执行过 deploy**，所以 README 明确写「未发布」。
-- README 里写清「如何从 GitHub Packages 引用」，以及在没发布时的替代方案（`mvn install` 后本地依赖）。
+  权限 `packages: write`）。**已于 2026-11-05 首次执行**（tag `sdk-v0.1.0`，run #1 成功），README 已改为「已发布」。
+- README 里写清「如何从 GitHub Packages 引用」，以及没有 token 时 `mvn install` 的替代方案。
 
 ### J.8 J 的完成定义（Checklist）
 

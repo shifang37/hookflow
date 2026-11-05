@@ -73,6 +73,18 @@ export default defineConfig(({ command }) => ({
       reporter: ['text', 'html'],
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/test/**', 'src/main.tsx', 'src/vite-env.d.ts', '**/*.d.ts'],
+      /**
+       * Anti-regression gate, mirroring the backend's `jacoco:check` (LINE >= 28% against
+       * a 29.1% baseline). The thresholds sit 1-2 points under the 2026-11-05 baseline
+       * (statements 85.31 / branches 75.39 / functions 80.87 / lines 84.86), so a real
+       * drop fails `npm run test:coverage` while normal noise does not move the gate.
+       */
+      thresholds: {
+        statements: 84,
+        branches: 74,
+        functions: 79,
+        lines: 83,
+      },
     },
   },
 }))
