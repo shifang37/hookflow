@@ -5,14 +5,41 @@ Base URL：`http://localhost:8080`
 
 ## 认证
 
-两个信任域，不要混用：
+三个入口，两个信任域，不要混用：
 
 | 用途 | 凭证 | 位置 |
 |---|---|---|
 | 租户业务接口 `/v1/**` | API Key | `Authorization: Bearer hk_<prefix>_<secret>` |
-| 运营接口 `/v1/admin/**` | Bootstrap Token | `X-Bootstrap-Token: <token>` |
+| 运营接口 `/v1/admin/**`（人） | 控制台登录会话 | `JSESSIONID` Cookie（`HttpOnly`, `SameSite=Lax`） |
+| 运营接口 `/v1/admin/**`（脚本） | Bootstrap Token | `X-Bootstrap-Token: <token>` |
+| 控制台登录 | 用户名 + 密码 | `POST /api/auth/login` |
 
 API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
+
+### 控制台登录
+
+```bash
+# 1. 先拿 CSRF Cookie（响应会 Set-Cookie: XSRF-TOKEN=...）
+curl -c cookies.txt -s localhost:8080/api/auth/session
+
+# 2. 登录（默认开发账号 admin / admin123；生产必须改）
+curl -b cookies.txt -c cookies.txt -s -X POST localhost:8080/api/auth/login \
+  -H "X-XSRF-TOKEN: $(grep XSRF-TOKEN cookies.txt | awk '{print $7}')" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'username=admin&password=admin123'
+# 200 {"authenticated":true,"username":"admin","roles":["ADMIN"]}
+
+# 3. 之后用 Cookie 调运营接口
+curl -b cookies.txt -s localhost:8080/v1/admin/tenants
+```
+
+角色：`ADMIN` 可读写，`VIEWER` 只能 `GET`/`HEAD`。会话写请求必须带
+`X-XSRF-TOKEN`（登录后 token 会轮换，重新 `GET /api/auth/session` 一次即可），
+否则返回 `403`。脚本用 `X-Bootstrap-Token` 时不需要 CSRF；该 token 在服务端被当作
+`ADMIN` 的机器凭证。退出登录：`POST /api/auth/logout`（同样需要 CSRF token）。
+
+匿名访问 `/ui/**` 会 302 到 `/ui/login`；匿名访问 `/v1/admin/**` 返回 `401` JSON，
+不会重定向到登录页。
 
 ## 统一错误体
 
@@ -30,7 +57,7 @@ API Key 只在创建时返回一次，之后只存 `SHA-256(secret)`。
 |---:|---|---:|---|
 | 40000 | `INVALID_REQUEST` | 400 | 参数错误 |
 | 40100 | `UNAUTHORIZED` | 401 | 凭证缺失/无效/已撤销 |
-| 40300 | `FORBIDDEN` | 403 | 无权限（scope 不足或租户被停用） |
+| 40300 | `FORBIDDEN` | 403 | 无权限（scope 不足、租户被停用、`VIEWER` 执行写操作，或会话写请求缺少 CSRF token） |
 | 40400 | `NOT_FOUND` | 404 | 资源不存在（含跨租户访问） |
 | 40500 | `METHOD_NOT_ALLOWED` | 405 | — |
 | 41300 | `PAYLOAD_TOO_LARGE` | 413 | payload 超限 |
@@ -81,7 +108,7 @@ curl -X POST localhost:8080/v1/admin/tenants \
 
 ## 运营控制台接口
 
-和上面的 `/v1/admin/**` 是**同一个信任域**（`X-Bootstrap-Token`）：那组负责开通（建租户、发 Key、撤 Key），这一组负责观测（谁在用、用得怎么样、平台整体如何），外加一个改租户策略的写接口。
+和上面的 `/v1/admin/**` 是**同一个信任域**：那组负责开通（建租户、发 Key、撤 Key），这一组负责观测（谁在用、用得怎么样、平台整体如何），外加一个改租户策略的写接口。两组都接受控制台会话或 `X-Bootstrap-Token`；会话按角色授权，`VIEWER` 的写请求统一 `403`。下面的 `curl` 用 Bootstrap Token，脚本不需要登录流程。
 
 ### GET /v1/admin/tenants?search=&page=0&size=20
 
@@ -601,7 +628,7 @@ curl -X POST localhost:8080/v1/deliveries/replay \
 | `GET /actuator/health/readiness` | K8s readiness（含 MySQL/RabbitMQ 依赖） |
 | `GET /actuator/health/liveness` | K8s liveness |
 | `GET /actuator/prometheus` | Prometheus 指标 |
-| `GET /ui/` | 运营控制台（前端构建产物；`/ui/events` 等客户端路由由后端兜到 `index.html`） |
+| `GET /ui/` | 运营控制台（需登录；前端构建产物；`/ui/events` 等客户端路由由后端兜到 `index.html`） |
 | `GET /demo/` | 单机演示控制台（仅 `all` profile） |
 
 ## 接收方验签示例（Java）

@@ -114,8 +114,9 @@ Invoke-RestMethod -Method Post http://localhost:8080/v1/events `
 | `config.demoEnabled` | `false` | `/v1/demo/**` 无鉴权，别在共享集群打开 |
 | `config.egressAllowPrivateTargets` | `false` | SSRF 防护；kind 指向集群内 demo-receiver 时 dev overlay 才置 `true` |
 | `config.otlpExport` | `false` | 没有 collector 时保持关闭 |
+| `config.sessionCookieSecure` | `false`（prod `true`） | HTTPS 部署必须为 `true`；kind 的端口转发是 HTTP，所以 dev 保持关闭 |
 | `secrets.create` | `true` | dev 用；生产设 `false` |
-| `secrets.existingSecret` | `""` | `create=false` 时必填，需含 4 个 key |
+| `secrets.existingSecret` | `""` | `create=false` 时必填，需含 6 个 key（含两个控制台账号密码） |
 | `terminationGracePeriodSeconds` | `75` | > lease 60s + read 10s |
 | `preStopSleepSeconds` | `5` | 先摘流量再 SIGTERM |
 
@@ -125,10 +126,17 @@ Invoke-RestMethod -Method Post http://localhost:8080/v1/events `
 kubectl -n hookflow create secret generic hookflow-secrets \
   --from-literal=HOOKFLOW_MASTER_KEY='...' \
   --from-literal=HOOKFLOW_BOOTSTRAP_TOKEN='...' \
+  --from-literal=HOOKFLOW_CONSOLE_ADMIN_PASSWORD='...' \
+  --from-literal=HOOKFLOW_CONSOLE_VIEWER_PASSWORD='...' \
   --from-literal=DB_PASSWORD='...' \
   --from-literal=MQ_PASSWORD='...'
 helm install hookflow helm/hookflow -n hookflow -f helm/hookflow/values-prod.yaml
 ```
+
+控制台在 api Service 的 `/ui/`，账号密码来自 Secret 的
+`HOOKFLOW_CONSOLE_ADMIN_PASSWORD` / `HOOKFLOW_CONSOLE_VIEWER_PASSWORD`。HTTPS 入口必须
+保持 `config.sessionCookieSecure=true`（`values-prod.yaml` 已设）；`X-Bootstrap-Token`
+仍可用于脚本，不经过登录页。
 
 ## 5. HPA 与 PDB
 

@@ -1,7 +1,7 @@
 import axios, { type AxiosAdapter, type InternalAxiosRequestConfig } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearCredentials, setAdminToken, setTenantToken } from './auth'
-import { ApiError, api, http } from './client'
+import { clearCredentials, setTenantToken } from './auth'
+import { ApiError, SESSION_EXPIRED_EVENT, api, http } from './client'
 
 /**
  * Request-level tests: what each `api.*` function actually puts on the wire.
@@ -42,7 +42,6 @@ beforeEach(() => {
   calls = []
   clearCredentials()
   setTenantToken('hk_test_secret')
-  setAdminToken('admin-token')
   http.defaults.adapter = vi.fn(async (config) => {
     calls.push(record(config))
     return okAdapter(config)
@@ -235,15 +234,16 @@ describe('api request functions', () => {
     expect(calls[1]?.uri).toBe('/v1/deliveries')
   })
 
-  it('sends the tenant bearer token to /v1 and the bootstrap token to /v1/admin', async () => {
+  it('sends the tenant bearer to /v1 and no credential header to /v1/admin', async () => {
     await api.listEvents()
     await api.listTenants()
 
     expect(calls[0]?.headers.Authorization).toBe('Bearer hk_test_secret')
-    expect(calls[0]?.headers['X-Bootstrap-Token']).toBeUndefined()
 
-    expect(calls[1]?.headers['X-Bootstrap-Token']).toBe('admin-token')
+    // The session cookie and X-XSRF-TOKEN are attached by the browser/axios, not by
+    // this function; an explicit Authorization or bootstrap header here would be wrong.
     expect(calls[1]?.headers.Authorization).toBeUndefined()
+    expect(calls[1]?.headers['X-Bootstrap-Token']).toBeUndefined()
   })
 
   it('serializes write bodies as JSON, with the method the backend expects', async () => {
@@ -264,13 +264,37 @@ describe('api request functions', () => {
     expect(bodyOf(calls[3])).toEqual({ orderId: 123 })
   })
 
-  it('fails before the request goes out when the credential is missing', async () => {
+  it('fails before the request goes out when the tenant credential is missing', async () => {
     clearCredentials()
 
     await expect(api.listEvents()).rejects.toBeInstanceOf(ApiError)
-    await expect(api.listTenants()).rejects.toBeInstanceOf(ApiError)
-    // Not a failed request: nothing reached the adapter, so there is no half-sent call.
-    expect(calls).toHaveLength(0)
+    // Admin calls are not blocked locally: their credential is the server-side
+    // session, and only the server can say whether it is still valid.
+    await expect(api.listTenants()).resolves.toBeNull()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.uri).toBe('/v1/admin/tenants')
+  })
+
+  it('signals an expired session only for a 401 on the admin domain', async () => {
+    let expired = 0
+    const listener = () => {
+      expired += 1
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, listener)
+    http.defaults.adapter = vi.fn(async () => {
+      throw {
+        isAxiosError: true,
+        response: { status: 401, data: { code: 40100, error: 'UNAUTHORIZED', message: 'nope' } },
+      }
+    })
+
+    await api.listEvents().catch(() => undefined)
+    expect(expired).toBe(0)
+
+    await api.listTenants().catch(() => undefined)
+    expect(expired).toBe(1)
+
+    window.removeEventListener(SESSION_EXPIRED_EVENT, listener)
   })
 
   it('turns an error response into an ApiError that keeps code and requestId', async () => {

@@ -14,7 +14,7 @@ import { SecretRevealModal } from '@/components/SecretRevealModal'
  * shows it once, because the server keeps only a hash and this list could not show it
  * even if the UI wanted to.
  */
-export function TenantKeysCard({ tenant }: { tenant: Tenant }) {
+export function TenantKeysCard({ tenant, readOnly = false }: { tenant: Tenant; readOnly?: boolean }) {
   const { message } = App.useApp()
   const { data: keys, error } = useTenantKeys(tenant.tenantId)
   const issue = useIssueTenantKey(tenant.tenantId)
@@ -26,19 +26,21 @@ export function TenantKeysCard({ tenant }: { tenant: Tenant }) {
       size="small"
       title="API Keys"
       extra={
-        <Button
-          size="small"
-          type="primary"
-          loading={issue.isPending}
-          onClick={() =>
-            issue.mutate(undefined, {
-              onSuccess: (key) => setIssued(key),
-              onError: (cause) => message.error(cause.message),
-            })
-          }
-        >
-          生成新 Key
-        </Button>
+        readOnly ? null : (
+          <Button
+            size="small"
+            type="primary"
+            loading={issue.isPending}
+            onClick={() =>
+              issue.mutate(undefined, {
+                onSuccess: (key) => setIssued(key),
+                onError: (cause) => message.error(cause.message),
+              })
+            }
+          >
+            生成新 Key
+          </Button>
+        )
       }
     >
       {error !== null && <Alert type="error" showIcon message="读取 API Key 失败" description={error.message} />}
@@ -51,27 +53,31 @@ export function TenantKeysCard({ tenant }: { tenant: Tenant }) {
           dataSource={keys ?? []}
           renderItem={(key) => (
             <List.Item
-              actions={[
-                <Popconfirm
-                  key="revoke"
-                  title="撤销这把 Key？"
-                  description="撤销后立刻失效：用它发出的请求会开始返回 401，且不可恢复。"
-                  okText="撤销"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  disabled={key.status === 'REVOKED'}
-                  onConfirm={() =>
-                    revoke.mutate(key.id, {
-                      onSuccess: () => message.success('已撤销'),
-                      onError: (cause) => message.error(cause.message),
-                    })
-                  }
-                >
-                  <Button size="small" danger disabled={key.status === 'REVOKED'}>
-                    撤销
-                  </Button>
-                </Popconfirm>,
-              ]}
+              actions={
+                readOnly
+                  ? []
+                  : [
+                      <Popconfirm
+                        key="revoke"
+                        title="撤销这把 Key？"
+                        description="撤销后立刻失效：用它发出的请求会开始返回 401，且不可恢复。"
+                        okText="撤销"
+                        cancelText="取消"
+                        okButtonProps={{ danger: true }}
+                        disabled={key.status === 'REVOKED'}
+                        onConfirm={() =>
+                          revoke.mutate(key.id, {
+                            onSuccess: () => message.success('已撤销'),
+                            onError: (cause) => message.error(cause.message),
+                          })
+                        }
+                      >
+                        <Button size="small" danger disabled={key.status === 'REVOKED'}>
+                          撤销
+                        </Button>
+                      </Popconfirm>,
+                    ]
+              }
             >
               <List.Item.Meta
                 title={

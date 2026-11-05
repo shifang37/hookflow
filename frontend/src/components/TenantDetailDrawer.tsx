@@ -30,10 +30,13 @@ import { useUiStore } from '@/stores/uiStore'
  */
 export function TenantDetailDrawer({
   tenant,
+  readOnly = false,
   onClose,
   onUpdated,
 }: {
   tenant: Tenant | undefined
+  /** VIEWER: show the numbers, hide every control that would produce a 403. */
+  readOnly?: boolean
   onClose: () => void
   onUpdated: (tenant: Tenant) => void
 }) {
@@ -76,37 +79,48 @@ export function TenantDetailDrawer({
             <Descriptions.Item label="创建时间">{formatTimestamp(tenant.createdAt)}</Descriptions.Item>
           </Descriptions>
 
-          <Card size="small" title="生命周期">
-            <Space align="start">
-              {tenant.status === 'ACTIVE' ? (
-                <Popconfirm
-                  title="停用这个租户？"
-                  description="停用后该租户不能再写入新事件；已接收的投递会继续处理，数据不会删除。"
-                  okText="确认停用"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => changeStatus(tenant, 'SUSPENDED')}
-                >
-                  <Button danger loading={update.isPending}>
-                    停用租户
+          {readOnly && (
+            <Alert
+              type="info"
+              showIcon
+              message="只读角色"
+              description="当前账号是 VIEWER，可以查看统计和 Key 前缀，但不能停用租户、调整策略或轮换 Key。"
+            />
+          )}
+
+          {!readOnly && (
+            <Card size="small" title="生命周期">
+              <Space align="start">
+                {tenant.status === 'ACTIVE' ? (
+                  <Popconfirm
+                    title="停用这个租户？"
+                    description="停用后该租户不能再写入新事件；已接收的投递会继续处理，数据不会删除。"
+                    okText="确认停用"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => changeStatus(tenant, 'SUSPENDED')}
+                  >
+                    <Button danger loading={update.isPending}>
+                      停用租户
+                    </Button>
+                  </Popconfirm>
+                ) : (
+                  <Button
+                    type="primary"
+                    loading={update.isPending}
+                    onClick={() => changeStatus(tenant, 'ACTIVE')}
+                  >
+                    启用租户
                   </Button>
-                </Popconfirm>
-              ) : (
-                <Button
-                  type="primary"
-                  loading={update.isPending}
-                  onClick={() => changeStatus(tenant, 'ACTIVE')}
-                >
-                  启用租户
-                </Button>
-              )}
-              <Typography.Text type="secondary" className="text-xs">
-                {tenant.status === 'ACTIVE'
-                  ? '停用是可逆的：Key、Endpoint 和投递历史都会保留。'
-                  : '该租户当前不能写入新事件；启用后恢复。'}
-              </Typography.Text>
-            </Space>
-          </Card>
+                )}
+                <Typography.Text type="secondary" className="text-xs">
+                  {tenant.status === 'ACTIVE'
+                    ? '停用是可逆的：Key、Endpoint 和投递历史都会保留。'
+                    : '该租户当前不能写入新事件；启用后恢复。'}
+                </Typography.Text>
+              </Space>
+            </Card>
+          )}
 
           {error !== null && (
             <Alert type="error" showIcon message="读取统计失败" description={error.message} />
@@ -159,9 +173,10 @@ export function TenantDetailDrawer({
             )}
           </Card>
 
-          <TenantKeysCard tenant={tenant} />
+          <TenantKeysCard tenant={tenant} readOnly={readOnly} />
 
-          <Card size="small" title="调整策略">
+          {!readOnly && (
+            <Card size="small" title="调整策略">
             <Form
               layout="vertical"
               key={tenant.tenantId}
@@ -210,7 +225,8 @@ export function TenantDetailDrawer({
                 保存
               </Button>
             </Form>
-          </Card>
+            </Card>
+          )}
         </div>
       )}
     </Drawer>

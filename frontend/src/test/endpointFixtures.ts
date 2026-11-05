@@ -83,5 +83,5 @@ export function resetEndpointPageMocks(): void {
     isPending: false,
   } as unknown as ReturnType<typeof useDeleteEndpoint>)
 
-  useUiStore.setState({ tenantToken: 'hk_test', adminToken: '' })
+  useUiStore.setState({ tenantToken: 'hk_test' })
 }

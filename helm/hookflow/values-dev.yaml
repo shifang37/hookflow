@@ -59,11 +59,14 @@ config:
   demoEnabled: "false"
   tracingEnabled: "true"
   otlpExport: "false"
+  sessionCookieSecure: "false"
 
 secrets:
   create: true
   masterKey: "hookflow-dev-master-key-change-in-production-32"
   bootstrapToken: "hookflow-dev-bootstrap-token"
+  consoleAdminPassword: "admin123"
+  consoleViewerPassword: "viewer123"
   dbPassword: hookflow
   mqPassword: hookflow
 

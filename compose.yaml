@@ -102,6 +102,9 @@ services:
       REDIS_HOST: redis
       HOOKFLOW_MASTER_KEY: ${HOOKFLOW_MASTER_KEY:-hookflow-dev-master-key-change-in-production-32}
       HOOKFLOW_BOOTSTRAP_TOKEN: ${HOOKFLOW_BOOTSTRAP_TOKEN:-hookflow-dev-bootstrap-token}
+      HOOKFLOW_CONSOLE_ADMIN_PASSWORD: ${HOOKFLOW_CONSOLE_ADMIN_PASSWORD:-admin123}
+      HOOKFLOW_CONSOLE_VIEWER_PASSWORD: ${HOOKFLOW_CONSOLE_VIEWER_PASSWORD:-viewer123}
+      CONSOLE_SESSION_COOKIE_SECURE: ${CONSOLE_SESSION_COOKIE_SECURE:-false}
       # Containerised demo exports traces; a host-run demo keeps them off.
       OTLP_EXPORT: ${OTLP_EXPORT:-true}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://jaeger:4318/v1/traces}

@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **控制台登录 + 角色**（管理后台验收的「需登录」项）：`/ui/login` 用 Spring Security
+  表单登录、服务端会话与 CSRF 防护；`ADMIN` 可读写运营接口，`VIEWER` 只读。
+  公共 API `/v1/**` 的手写 Key 认证不变（ADR-0007），`X-Bootstrap-Token` 仍作为
+  脚本/Helm smoke test 的机器凭证，经由过滤器桥接为 `ADMIN`。设计见
+  [ADR-0015](docs/adr/0015-console-login-with-spring-security.md)。
+- 前端新增登录页、`RequireAuth`、会话过期自动回登录页、按角色隐藏写操作；
+  租户凭证抽屉只剩租户 API Key，运营凭证不再进入浏览器存储。
+- 新增 `ConsoleAuthIT`（9 个用例，真实 session + CSRF + 角色 + Bootstrap Token 兼容）
+  和 10 个后端单测；全量 `./mvnw verify` 为 185 单元 + 82 集成测试。
+
 ### 发布
 
 - **Java SDK 0.1.0 已发布到 GitHub Packages**：tag `sdk-v0.1.0` 触发 `sdk-publish.yml` 的 run #1，

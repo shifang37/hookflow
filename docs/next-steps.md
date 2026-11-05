@@ -66,14 +66,14 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | `service/ReportService.java` | 读模型门面：分页裁剪、`range` 解析、成功率口径、分桶选择。**口径定义都在这里** |
 | `persistence/ReportMapper.java` | 报表 SQL（聚合/分桶/百分位）。刻意独立于 `DeliveryMapper`（那个是状态机 CAS） |
 | `persistence/ApiKeyQueryMapper.java` | Key 元数据列表。**SQL 里不出现 `key_hash`**，所以不可能漏出哈希 |
-| `common/auth/BootstrapTokenGuard.java` | 运营令牌校验，从 `AdminController` 抽出来给两个控制器共用 |
+| `common/auth/BootstrapTokenGuard.java` | 运营令牌校验；v0.4 起由 `BootstrapTokenAuthenticationFilter` 桥接成 Spring Security 的 `ADMIN`，公共 API 的 Key 认证仍走 ADR-0007 |
 | `config/UiForwardController.java` | `/ui/**` 的 SPA 回退（正则排除带点的资源路径） |
 | `resources/db/migration/V4__report_read_indexes.sql` | `idx_delivery_updated_status (updated_at, status)` |
 | `common/error/ErrorCode.java` | 新增 `40904 ALREADY_EXISTS` |
 
 ### 前端（`frontend/`，33 个源文件）
 
-- `src/api/` — `client.ts`（两个信任域的请求头 + 统一 `ApiError`）、`queries.ts`（React Query hooks，轮询间隔集中一处）、`types.ts`（手写 wire 类型）、`time.ts`（UTC 时间格式化）、`auth.ts`（凭证存取）
+- `src/api/` — `client.ts`（租户 Bearer + 会话/CSRF 配置 + 统一 `ApiError`）、`session.ts`（登录/退出/会话探测）、`queries.ts`（React Query hooks，轮询间隔集中一处）、`types.ts`（手写 wire 类型）、`time.ts`（UTC 时间格式化）、`auth.ts`（仅租户 Key 存取）
 - `src/pages/` — 事件流、投递、Endpoints、租户、系统监控
 - `src/components/` — `AppShell`、`StatusTag`、`PageTitle`、`TokenDrawer`、`CredentialAlert`、`SecretRevealModal`
 - `vite.config.ts`、`tsconfig.json`、`eslint.config.js`、`tailwind.config.js`（`preflight: false`，因为 AntD v5 自带 reset）
@@ -210,7 +210,8 @@ config，再用 `axios.getUri(config)` 跑同一个 params 序列化器，所以
 - 参数序列化：`listEvents({ eventType: undefined, page: 0 })` 的 URI 必须是 `/v1/events?page=0`，
   `listDeliveries({ status: undefined, eventId: undefined })` 必须是 `/v1/deliveries` —— 也就是
   **`undefined` 不能变成 `?status=`**，这正是文档里点名要防的那种回归。
-- 两个信任域：租户调用带 `Authorization: Bearer …`、**不带** `X-Bootstrap-Token`；admin 调用反过来。
+- 两个信任域：租户调用带 `Authorization: Bearer …`、**不带** `X-Bootstrap-Token`。
+  （v0.4 起 admin 调用改为登录会话，不再由前端带 bootstrap token；见 ADR-0015。）
 - 写请求的 body 是 JSON（`createEndpoint` / `replayDeliveries` / `updateTenant`），方法分别是
   POST / POST / PATCH。
 - 缺凭证时在 adapter 之前就抛 `ApiError(401)`，`calls` 长度为 0（没有"发了一半"的请求）。

@@ -21,6 +21,9 @@ export default defineConfig(({ command }) => ({
     // production build needs no CORS at all.
     proxy: {
       '/v1': { target: 'http://localhost:8080', changeOrigin: true },
+      // Login, session probe and logout. Same-origin in the built app; the dev
+      // server needs the proxy so the session cookie is issued for localhost.
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
       '/actuator': { target: 'http://localhost:8080', changeOrigin: true },
     },
   },

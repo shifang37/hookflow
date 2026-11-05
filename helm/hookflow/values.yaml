@@ -71,15 +71,21 @@ config:
   # Exporting OTLP traces/metrics is opt-in; the chart does not run a collector.
   tracingEnabled: "true"
   otlpExport: "false"
+  # The console session cookie must be Secure behind TLS. values-prod turns it on;
+  # this dev default stays false so a port-forward over plain HTTP still logs in.
+  sessionCookieSecure: "false"
 
 # Secrets. Either let the chart create one from these values (dev), or point at
 # an existing Secret with keys HOOKFLOW_MASTER_KEY, HOOKFLOW_BOOTSTRAP_TOKEN,
+# HOOKFLOW_CONSOLE_ADMIN_PASSWORD, HOOKFLOW_CONSOLE_VIEWER_PASSWORD,
 # DB_PASSWORD and MQ_PASSWORD (prod).
 secrets:
   create: true
   existingSecret: ""
   masterKey: "hookflow-dev-master-key-change-in-production-32"
   bootstrapToken: "hookflow-dev-bootstrap-token"
+  consoleAdminPassword: "admin123"
+  consoleViewerPassword: "viewer123"
   dbPassword: hookflow
   mqPassword: hookflow
 

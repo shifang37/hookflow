@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>HookFlow console test shell</title>
+</head>
+<body>
+<!--
+  Test-classpath stand-in for the built SPA shell.
+
+  The real bundle under src/main/resources/static/ui/ is gitignored (frontend/dist
+  is generated, not source), so a fresh checkout has no index.html. ConsoleAuthIT
+  needs to prove that an anonymous GET /ui/login is served rather than redirected
+  to itself; a minimal file on the test classpath makes that assertion independent
+  of whether the frontend was built first. It is never packaged into the jar.
+-->
+<div id="root"></div>
+</body>
+</html>

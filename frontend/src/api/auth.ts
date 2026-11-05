@@ -1,16 +1,14 @@
 /**
- * Two credentials, two trust domains — the same split the backend enforces.
+ * Tenant credential storage.
  *
- *   tenant token   `Authorization: Bearer hk_...`  → `/v1/events`, `/v1/deliveries`
- *   admin token    `X-Bootstrap-Token: ...`        → `/v1/admin/**`
- *
- * Precedence is localStorage over the build-time default, so a demo can ship with
- * `.env.local` values and a reviewer can still paste their own without rebuilding.
- * Values are never logged and never rendered back into the DOM.
+ * The console login is a server-side session (HttpOnly cookie), so the operator
+ * credential is no longer readable — or writable — from JavaScript. What remains
+ * here is the *other* trust domain: a tenant API key that authorizes the
+ * event/delivery/endpoint pages. It is kept in localStorage because the same demo
+ * tenant is usually reused across reloads, and it is never echoed back into the DOM.
  */
 
 const TENANT_STORAGE_KEY = 'hookflow.tenant-token'
-const ADMIN_STORAGE_KEY = 'hookflow.admin-token'
 
 function readToken(storageKey: string, fallback: string | undefined): string {
   try {
@@ -45,15 +43,6 @@ export function setTenantToken(token: string): void {
   writeToken(TENANT_STORAGE_KEY, token)
 }
 
-export function getAdminToken(): string {
-  return readToken(ADMIN_STORAGE_KEY, import.meta.env.VITE_HOOKFLOW_BOOTSTRAP_TOKEN)
-}
-
-export function setAdminToken(token: string): void {
-  writeToken(ADMIN_STORAGE_KEY, token)
-}
-
 export function clearCredentials(): void {
   writeToken(TENANT_STORAGE_KEY, '')
-  writeToken(ADMIN_STORAGE_KEY, '')
 }

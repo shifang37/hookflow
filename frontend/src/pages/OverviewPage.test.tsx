@@ -94,7 +94,7 @@ describe('OverviewPage', () => {
     mockedOverview.mockReset()
     mockedTimeseries.mockReset()
     mockedLatency.mockReset()
-    useUiStore.setState({ adminToken: 'admin-token', tenantToken: '', range: '24h', interval: 'auto' })
+    useUiStore.setState({ tenantToken: '', range: '24h', interval: 'auto' })
   })
 
   it('renders the overview cards from the aggregate endpoint', () => {

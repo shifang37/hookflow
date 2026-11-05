@@ -115,16 +115,30 @@ Ant Design + React Query + Zustand + Recharts。五个页面都读前面那组�
 | 事件流（2 秒轮询，按类型 / 时间范围筛选） | `GET /v1/events` | 租户 API Key |
 | 投递（按状态 / Endpoint / 时间范围筛选 + 重放死信） | `GET /v1/deliveries` + `POST …/replay` | 租户 API Key |
 | Endpoints（新建 / 暂停 / 恢复） | `/v1/endpoints` | 租户 API Key（写操作要 `endpoint:write`） |
-| 租户（创建 / 统计 / 改策略 / Key 轮换） | `/v1/admin/tenants*`、`/tenants/{id}/keys` | Bootstrap Token |
-| 系统监控（吞吐折线 + 耗时分布 + 百分位） | `/v1/admin/overview`、`/metrics/timeseries`、`/metrics/latency` | Bootstrap Token |
+| 租户（创建 / 统计 / 改策略 / Key 轮换） | `/v1/admin/tenants*`、`/tenants/{id}/keys` | 登录会话（`ADMIN` 可写，`VIEWER` 只读） |
+| 系统监控（吞吐折线 + 耗时分布 + 百分位） | `/v1/admin/overview`、`/metrics/timeseries`、`/metrics/latency` | 登录会话 |
 
 ```bash
 ./mvnw spring-boot:run          # 终端 1
 cd frontend && npm install && npm run dev   # 终端 2 → http://localhost:5173
 ```
 
-首次打开会提示填凭证（右上角「凭证」）：租户 Key 用建租户响应里的 `apiKey`，运营令牌就是
-`hookflow.admin.bootstrap-token`。开发服务器把 `/v1` 代理到 8080，所以没有 base URL、也不用开 CORS。
+首次打开会跳到登录页（生产 `/ui/login`，开发服务器 `/login`）。本地开发默认账号（**只用于演示**）：
+
+| 账号 | 密码 | 角色 | 能做什么 |
+|---|---|---|---|
+| `admin` | `admin123` | `ADMIN` | 读写运营接口：建租户、改策略、轮换 Key |
+| `viewer` | `viewer123` | `VIEWER` | 只读：看列表、统计、监控 |
+
+> `VIEWER` 的只读边界是**运营接口**（`/v1/admin/**`）。事件流/投递/Endpoint 页面用的是
+> 租户 API Key，属于另一个信任域；VIEWER 若同时持有可写的租户 Key，仍能操作那个租户。
+> 这不是提权，因为他本来就拿着租户凭证。设计边界见 ADR-0015。
+
+覆盖方式：`HOOKFLOW_CONSOLE_ADMIN_PASSWORD` / `HOOKFLOW_CONSOLE_VIEWER_PASSWORD`，
+或直接在 `hookflow.console.users` 里放 `{bcrypt}$2a$...` 哈希。登录后右上角「凭证」
+只填**租户** API Key（建租户响应里的 `apiKey`），用于事件流/投递/Endpoint 页面；
+运营凭证不再存在浏览器里。开发服务器把 `/v1`、`/api` 代理到 8080，所以没有 base URL、
+也不用开 CORS。认证/授权/会话的设计见 [ADR-0015](docs/adr/0015-console-login-with-spring-security.md)。
 
 生产构建 `npm run build:backend` 会把产物复制到 `src/main/resources/static/ui/`，后端从 `/ui/`
 提供服务（客户端路由由 `UiForwardController` 兜到 `index.html`，刷新不会 404）。
@@ -320,7 +334,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/v1/admin/tenants` | 开租户并发首个 API Key（需 `X-Bootstrap-Token`） |
+| `POST` | `/api/auth/login` | 控制台登录（会话 Cookie；默认账号见上） |
+| `POST` | `/v1/admin/tenants` | 开租户并发首个 API Key（需 `ADMIN` 会话或 `X-Bootstrap-Token`） |
 | `POST` | `/v1/admin/tenants/{id}/keys` | 追加 API Key |
 | `POST` | `/v1/endpoints` | 建回调地址，返回签名密钥（仅一次） |
 | `GET` | `/v1/endpoints` | 列出 endpoint |

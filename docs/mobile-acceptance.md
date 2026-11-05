@@ -2,12 +2,15 @@
 
 > 验收对象是 `/ui/` 这个 **Web 控制台**，不是 iOS/Android App。没有原生客户端、推送、应用商店或设备能力。
 > 本文记录的是 **390×844 视口** 的验收结果；真机浏览器是可选补充，不是交付前提。
+>
+> 2026-11-05 补充：控制台新增登录页。登录卡片为 `max-w-sm` + 外层 `p-4`，390 视口下
+> 可用宽度 358px，不会横向溢出；本次没有重跑登录页的视口测量，原五个页面的测量不变。
 
 - 日期：2026-10-30
 - 前端：`ba6c109` 之后的移动端修复（drawer 宽度、表格滚动、签名提示换行）
 - 浏览器：Chrome 156 headless，CDP `Emulation.setDeviceMetricsOverride`，390×844，mobile=true
 - 数据：本机 `all` profile 的 demo 租户（真实接口、真实投递数据）
-- 方法：设置租户 Key / Bootstrap Token 后逐页导航，量 `document.documentElement.scrollWidth` 与
+- 方法：登录（`admin` / `admin123`）并设置租户 Key 后逐页导航，量 `document.documentElement.scrollWidth` 与
   `window.innerWidth`，打开抽屉后再量 `.ant-drawer-content-wrapper` 的实际宽度
 
 ## 通过标准
@@ -73,6 +76,6 @@
    ```
 
 2. Chrome DevTools → Device Toolbar → 390×844 → 打开 `http://127.0.0.1:5173/events`；
-3. 在右上角「凭证」填入租户 Key 和 Bootstrap Token；
+3. 用 `admin` / `admin123` 登录，再在右上角「凭证」填入租户 Key；
 4. 依次检查五个页面；打开投递/租户/事件抽屉，确认页面没有出现整页横向滚动条；
 5. 在 Endpoints 页展开任意一行，确认签名公式可完整阅读。

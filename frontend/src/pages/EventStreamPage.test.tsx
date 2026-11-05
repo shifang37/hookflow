@@ -103,7 +103,7 @@ describe('EventStreamPage', () => {
       isPending: false,
     } as unknown as ReturnType<typeof useBatchReplayDeliveries>)
     // A credential is present so the page renders its table, not the credential banner.
-    useUiStore.setState({ tenantToken: 'hk_test_secret', adminToken: '' })
+    useUiStore.setState({ tenantToken: 'hk_test_secret' })
   })
 
   it('renders one row per event with its delivery roll-up', () => {

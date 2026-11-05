@@ -4,7 +4,6 @@ import dev.hookflow.api.AdminController;
 import dev.hookflow.api.dto.Dtos.ProvisionTenantRequest;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
-import dev.hookflow.config.HookFlowProperties;
 import dev.hookflow.persistence.TenantMapper;
 import dev.hookflow.service.EndpointService;
 import org.junit.jupiter.api.DisplayName;
@@ -36,8 +35,6 @@ class EndpointLifecycleIT extends AbstractIntegrationTest {
     private EndpointService endpointService;
     @Autowired
     private AdminController adminController;
-    @Autowired
-    private HookFlowProperties properties;
 
     @Test
     @DisplayName("a duplicate callback URL is a 409 that names the URL, not a 500")
@@ -71,14 +68,13 @@ class EndpointLifecycleIT extends AbstractIntegrationTest {
     @Test
     @DisplayName("a duplicate tenant name is a 409 and does not mint a second key")
     void duplicateTenantNameIsAConflict() {
-        String bootstrapToken = properties.admin().bootstrapToken();
         String name = "dup-tenant-" + UUID.randomUUID();
 
-        var first = adminController.provisionTenant(bootstrapToken,
+        var first = adminController.provisionTenant(
                 new ProvisionTenantRequest(name, 100, null, null));
         assertThat(first.apiKey()).isNotBlank();
 
-        assertThatThrownBy(() -> adminController.provisionTenant(bootstrapToken,
+        assertThatThrownBy(() -> adminController.provisionTenant(
                 new ProvisionTenantRequest(name, 100, null, null)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(thrown -> {

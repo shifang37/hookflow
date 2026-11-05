@@ -2,6 +2,9 @@
 
 - 状态：已采纳（v0.1）
 - 日期：2026-10-22
+- 补充（v0.4，2026-11-05）：控制台登录**用了** Spring Security，但只覆盖
+  `/ui/**` 和 `/v1/admin/**`；`/v1/**` 的 API Key 认证仍然是本 ADR 的手写过滤器。
+  边界与理由见 [ADR-0015](0015-console-login-with-spring-security.md)。
 
 ## 背景
 

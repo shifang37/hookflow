@@ -18,7 +18,6 @@ import { POLL_INTERVAL_MS, useLatency, useOverview, useTimeseries } from '@/api/
 import { formatBucketLabel, formatCount, formatLatencyBucket, formatMillis, formatPercent } from '@/api/time'
 import { INTERVALS, STATS_RANGES, type Interval, type StatsRange } from '@/api/types'
 import { PageTitle } from '@/components/PageTitle'
-import { CredentialAlert } from '@/components/CredentialAlert'
 import { LiveBadge } from '@/components/StatusTag'
 import { CHART_COLORS } from '@/theme'
 import { useUiStore } from '@/stores/uiStore'
@@ -70,7 +69,7 @@ export function OverviewPage() {
     <div>
       <PageTitle
         title="系统监控"
-        subtitle="运营域 · 需要 X-Bootstrap-Token · 窗口与前端图表同源，口径见 docs/api.md"
+        subtitle="运营域 · 需要登录 · 窗口与前端图表同源，口径见 docs/api.md"
         actions={
           <Space wrap>
             <LiveBadge intervalMs={POLL_INTERVAL_MS.overview} fetching={overview.isFetching} />
@@ -95,7 +94,6 @@ export function OverviewPage() {
         }
       />
 
-      <CredentialAlert scope="admin" />
 
       {error !== null && !(error instanceof ApiError && error.status === 401) && (
         <Alert className="mb-4" type="error" showIcon message="读取监控数据失败" description={error.message} />

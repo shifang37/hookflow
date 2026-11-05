@@ -20,6 +20,7 @@
 | [0012](0012-demo-console.md) | 演示控制台打进应用（静态页 + 条件 bean），不做独立前端工程 | 已采纳 |
 | [0013](0013-batch-ingest.md) | 批量摄入：一个事务 + 每条自己的幂等键，不做请求级事务/部分成功 | 已采纳（v0.4） |
 | [0014](0014-batched-relay-publish.md) | relay 批量发布：一批一个 confirm 窗口 + 一次批量 UPDATE，不做完全异步确认 | 已采纳（v0.4） |
+| [0015](0015-console-login-with-spring-security.md) | 控制台登录用 Spring Security 会话 + 角色；公共 API 保持手写 Key | 已采纳（v0.4） |
 
 ## 模板
 

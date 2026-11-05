@@ -124,7 +124,7 @@ export function EventStreamPage() {
         }
       />
 
-      <CredentialAlert scope="tenant" />
+      <CredentialAlert />
 
       {error !== null && !(error instanceof ApiError && error.status === 401) && (
         <Alert

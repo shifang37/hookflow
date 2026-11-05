@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ApiError, buildHeaders, toApiError } from './client'
-import { clearCredentials, setAdminToken, setTenantToken } from './auth'
+import { clearCredentials, setTenantToken } from './auth'
 
 /** Mirrors what axios actually puts on the wire, without opening a socket. */
 function axiosErrorWithBody(status: number, body: unknown): unknown {
@@ -27,9 +27,10 @@ describe('buildHeaders', () => {
     expect(buildHeaders('tenant')).toEqual({ Authorization: 'Bearer hk_abc_secret' })
   })
 
-  it('sends the operator token in X-Bootstrap-Token, not as a bearer', () => {
-    setAdminToken('bootstrap-token')
-    expect(buildHeaders('admin')).toEqual({ 'X-Bootstrap-Token': 'bootstrap-token' })
+  it('sends no credential header for admin calls: the HttpOnly session cookie is the credential', () => {
+    // Putting the bootstrap token here would hand every operator a cross-tenant
+    // machine secret that JavaScript can read.
+    expect(buildHeaders('admin')).toEqual({})
   })
 })
 

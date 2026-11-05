@@ -142,5 +142,5 @@ export function resetTenantPageMocks(): void {
     isPending: false,
   } as unknown as ReturnType<typeof useRevokeApiKey>)
 
-  useUiStore.setState({ tenantToken: '', adminToken: 'admin-token', range: '24h' })
+  useUiStore.setState({ tenantToken: '', range: '24h' })
 }

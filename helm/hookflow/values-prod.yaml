@@ -4,6 +4,8 @@
 #   kubectl -n hookflow create secret generic hookflow-secrets \
 #     --from-literal=HOOKFLOW_MASTER_KEY=... \
 #     --from-literal=HOOKFLOW_BOOTSTRAP_TOKEN=... \
+#     --from-literal=HOOKFLOW_CONSOLE_ADMIN_PASSWORD=... \
+#     --from-literal=HOOKFLOW_CONSOLE_VIEWER_PASSWORD=... \
 #     --from-literal=DB_PASSWORD=... \
 #     --from-literal=MQ_PASSWORD=...
 #   helm install hookflow helm/hookflow -n hookflow --create-namespace \
@@ -57,6 +59,7 @@ config:
   demoEnabled: "false"
   tracingEnabled: "true"
   otlpExport: "false"
+  sessionCookieSecure: "true"
 
 secrets:
   create: false

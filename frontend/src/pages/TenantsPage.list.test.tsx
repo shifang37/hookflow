@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '@/test/render'
 import { acme, acmeStats, resetTenantPageMocks, withStats, withTenants } from '@/test/tenantFixtures'
 import { useUpdateTenant } from '@/api/queries'
-import { useUiStore } from '@/stores/uiStore'
 import type { Tenant } from '@/api/types'
 import { TenantsPage } from './TenantsPage'
 
@@ -89,12 +88,28 @@ describe('TenantsPage', () => {
     expect(screen.getByText('窗口内没有死信')).toBeInTheDocument()
   })
 
-  it('warns when the operator token is missing', () => {
-    useUiStore.setState({ adminToken: '' })
+  it('hides the create action from a viewer', () => {
     withTenants([])
 
-    renderWithProviders(<TenantsPage />)
+    renderWithProviders(<TenantsPage />, {
+      session: { authenticated: true, username: 'viewer', roles: ['VIEWER'] },
+    })
 
-    expect(screen.getByText('尚未配置运营令牌')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /创建租户/ })).not.toBeInTheDocument()
+  })
+
+  it('opens the drawer read-only for a viewer', async () => {
+    withTenants([acme])
+    withStats(acmeStats)
+    renderWithProviders(<TenantsPage />, {
+      session: { authenticated: true, username: 'viewer', roles: ['VIEWER'] },
+    })
+
+    fireEvent.click(screen.getByText('acme'))
+
+    expect(await screen.findByText('只读角色')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /停用租户/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /生成新 Key/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('调整策略')).not.toBeInTheDocument()
   })
 })

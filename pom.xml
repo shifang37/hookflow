@@ -48,6 +48,17 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
+    <!--
+      Console login only. The public API keeps the hand-rolled API-key filter
+      (ADR-0007): a tenant key is a stateless bearer credential and has no
+      session, login form or CSRF surface. This starter is what gives the
+      operator console a real login, roles and a server-side session; see
+      ADR-0015 for why the boundary is drawn exactly there.
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
 
     <!-- persistence -->
     <dependency>

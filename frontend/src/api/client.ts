@@ -1,5 +1,5 @@
 import axios, { type AxiosRequestConfig } from 'axios'
-import { getAdminToken, getTenantToken } from './auth'
+import { getTenantToken } from './auth'
 import type {
   ApiKey,
   BatchReplay,
@@ -28,6 +28,14 @@ import type {
 
 /** Which credential a call needs. Not a role check: the backend does that. */
 export type Scope = 'tenant' | 'admin'
+
+/**
+ * Emitted by an admin call that came back 401. The session is a server-side cookie,
+ * so the client cannot see it expire; the first failed request is the signal. The
+ * app listens for this and drops the cached identity, which sends the router to
+ * the login page instead of leaving a screen full of "读取失败".
+ */
+export const SESSION_EXPIRED_EVENT = 'hookflow:session-expired'
 
 /**
  * One error type for the whole app.
@@ -66,14 +74,17 @@ export class ApiError extends Error {
   }
 }
 
-/** Pure so it can be unit-tested without a server, and shared by every call. */
+/**
+ * Pure so it can be unit-tested without a server, and shared by every call.
+ *
+ * Admin calls send no credential header at all: the browser attaches the
+ * `HttpOnly` session cookie, and axios adds the `X-XSRF-TOKEN` header from the
+ * readable CSRF cookie. Attaching the bootstrap token here would put a
+ * cross-tenant machine secret in every operator's browser.
+ */
 export function buildHeaders(scope: Scope): Record<string, string> {
   if (scope === 'admin') {
-    const token = getAdminToken()
-    if (token === '') {
-      throw new ApiError('缺少运营令牌，请在右上角「凭证」里填入 X-Bootstrap-Token', { status: 401 })
-    }
-    return { 'X-Bootstrap-Token': token }
+    return {}
   }
 
   const token = getTenantToken()
@@ -122,6 +133,11 @@ export const http = axios.create({
   // so there is no base URL to configure and no CORS to arrange.
   baseURL: '/',
   timeout: 15_000,
+  // Session and CSRF cookies are same-origin; `withCredentials` also makes the
+  // intent explicit if the console is ever fronted by a different origin.
+  withCredentials: true,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
   headers: { Accept: 'application/json' },
 })
 
@@ -130,7 +146,11 @@ async function request<T>(scope: Scope, config: AxiosRequestConfig): Promise<T> 
     const response = await http.request<T>({ ...config, headers: { ...config.headers, ...buildHeaders(scope) } })
     return response.data
   } catch (error) {
-    throw toApiError(error)
+    const apiError = toApiError(error)
+    if (scope === 'admin' && apiError.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    }
+    throw apiError
   }
 }
 

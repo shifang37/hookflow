@@ -5,6 +5,17 @@ server:
   # AMQP listener containers stop taking new messages first; the chart sizes the
   # grace period above the 60s delivery lease (see helm/hookflow/README.md).
   shutdown: graceful
+  servlet:
+    session:
+      # Console login sessions. The session is a server-side object; the browser
+      # only holds JSESSIONID, which is HttpOnly and SameSite=Lax so a cross-site
+      # POST cannot carry it. Mark the cookie Secure in any HTTPS deployment
+      # (CONSOLE_SESSION_COOKIE_SECURE=true); the local demo is plain HTTP.
+      timeout: ${CONSOLE_SESSION_TIMEOUT:30m}
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${CONSOLE_SESSION_COOKIE_SECURE:false}
 
 spring:
   application:
@@ -197,6 +208,20 @@ hookflow:
     fail-open: true
   admin:
     bootstrap-token: ${HOOKFLOW_BOOTSTRAP_TOKEN:hookflow-dev-bootstrap-token}
+  # --- v0.4: operator console login ---------------------------------------------
+  # Two trust domains, deliberately separate:
+  #   admin.bootstrap-token  machine credential for scripts / smoke tests
+  #   console.users          humans in the UI, one role each, server-side session
+  # The passwords below are DEV DEFAULTS. Override both environment variables (or
+  # supply {bcrypt}$2a$... hashes) anywhere that is not a throwaway local demo.
+  console:
+    users:
+      - username: admin
+        password: ${HOOKFLOW_CONSOLE_ADMIN_PASSWORD:admin123}
+        roles: [ADMIN]
+      - username: viewer
+        password: ${HOOKFLOW_CONSOLE_VIEWER_PASSWORD:viewer123}
+        roles: [VIEWER]
   # --- v0.3: interactive demo console (off outside the local `all` profile) ------
   demo:
     # Provisions its own tenants and exposes an UNAUTHENTICATED /v1/demo/** API.

@@ -20,3 +20,4 @@ data:
   HOOKFLOW_DEMO_ENABLED: {{ .Values.config.demoEnabled | quote }}
   TRACING_ENABLED: {{ .Values.config.tracingEnabled | quote }}
   OTLP_EXPORT: {{ .Values.config.otlpExport | quote }}
+  CONSOLE_SESSION_COOKIE_SECURE: {{ .Values.config.sessionCookieSecure | quote }}

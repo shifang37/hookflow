@@ -9,10 +9,10 @@ import {
   useTenants,
   type TenantQuery,
 } from '@/api/queries'
+import { useIsAdmin } from '@/api/session'
 import { formatTimestamp } from '@/api/time'
 import type { Tenant, TenantProvisioned } from '@/api/types'
 import { CreateTenantModal } from '@/components/CreateTenantModal'
-import { CredentialAlert } from '@/components/CredentialAlert'
 import { PageTitle } from '@/components/PageTitle'
 import { SecretRevealModal } from '@/components/SecretRevealModal'
 import { LiveBadge, TenantStatusTag } from '@/components/StatusTag'
@@ -21,15 +21,19 @@ import { TenantDetailDrawer } from '@/components/TenantDetailDrawer'
 const PAGE_SIZE = 20
 
 /**
- * Tenant management: the operator domain, so this page uses the bootstrap token.
+ * Tenant management: the operator domain, so this page uses the login session.
  *
  * The table is the whole page: search, the list, and the three actions a row can start
  * (open the drawer, create a tenant, reveal a freshly provisioned key). The drawer and
  * the modal live in `components/` because each is a screen of its own — the drawer
  * carries the statistics, the policy form and key rotation, and the modal carries the
  * provisioning form.
+ *
+ * A viewer sees the same data but no write affordance. That is a UX courtesy, not the
+ * security boundary: `/v1/admin/**` rejects the same viewer's POST/PATCH with a 403.
  */
 export function TenantsPage() {
+  const isAdmin = useIsAdmin()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<Tenant | undefined>(undefined)
@@ -87,26 +91,27 @@ export function TenantsPage() {
     <div>
       <PageTitle
         title="租户"
-        subtitle="运营域 · 需要 X-Bootstrap-Token · 点一行查看统计并调整策略"
+        subtitle="运营域 · 需要登录 · 点一行查看统计；管理员可调整策略"
         actions={
           <span className="flex items-center gap-2">
             <LiveBadge intervalMs={POLL_INTERVAL_MS.tenants} fetching={isFetching} />
             <Button icon={<ReloadOutlined />} size="small" onClick={() => void refetch()}>
               刷新
             </Button>
-            <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
-              onClick={() => setCreateOpen(true)}
-            >
-              创建租户
-            </Button>
+            {isAdmin && (
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateOpen(true)}
+              >
+                创建租户
+              </Button>
+            )}
           </span>
         }
       />
 
-      <CredentialAlert scope="admin" />
 
       {error !== null && !(error instanceof ApiError && error.status === 401) && (
         <Alert
@@ -154,26 +159,29 @@ export function TenantsPage() {
             showSizeChanger: false,
             onChange: (nextPage) => setPage(nextPage - 1),
           }}
-          locale={{ emptyText: '还没有租户。用 POST /v1/admin/tenants 建一个。' }}
+          locale={{ emptyText: '还没有租户。管理员可以点「创建租户」。' }}
         />
       </Card>
 
       <TenantDetailDrawer
         tenant={selected}
+        readOnly={!isAdmin}
         onClose={() => setSelected(undefined)}
         onUpdated={setSelected}
       />
 
-      <CreateTenantModal
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        onCreated={(created) => {
-          setCreateOpen(false)
-          setProvisioned(created)
-          // Newest-first list: the new tenant is on page 0, not wherever the operator was.
-          setPage(0)
-        }}
-      />
+      {isAdmin && (
+        <CreateTenantModal
+          open={createOpen}
+          onCancel={() => setCreateOpen(false)}
+          onCreated={(created) => {
+            setCreateOpen(false)
+            setProvisioned(created)
+            // Newest-first list: the new tenant is on page 0, not wherever the operator was.
+            setPage(0)
+          }}
+        />
+      )}
 
       <SecretRevealModal
         open={provisioned !== undefined}

@@ -93,7 +93,7 @@ describe('DeliveriesPage', () => {
       mutate: vi.fn(),
       isPending: false,
     } as unknown as ReturnType<typeof useBatchReplayDeliveries>)
-    useUiStore.setState({ tenantToken: 'hk_test', adminToken: '' })
+    useUiStore.setState({ tenantToken: 'hk_test' })
   })
 
   it('renders status, attempt budget and the last error', () => {

@@ -46,8 +46,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        // Admin bootstrap is guarded by an operator token, not by tenant keys.
-        if (path.startsWith("/v1/admin/")) {
+        // Admin bootstrap is guarded by the operator boundary (session or
+        // X-Bootstrap-Token), not by tenant keys. Match the bare prefix too so a
+        // request to /v1/admin is not answered by this filter first.
+        if (path.equals("/v1/admin") || path.startsWith("/v1/admin/")) {
             return true;
         }
         // The demo console's API has no credential: a tenant key in browser JS would

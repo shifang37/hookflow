@@ -2,7 +2,6 @@ package dev.hookflow.api;
 
 import dev.hookflow.api.dto.Dtos.ProvisionTenantRequest;
 import dev.hookflow.api.dto.Dtos.ProvisionTenantResponse;
-import dev.hookflow.common.auth.BootstrapTokenGuard;
 import dev.hookflow.common.error.ApiException;
 import dev.hookflow.common.error.ErrorCode;
 import dev.hookflow.persistence.TenantMapper;
@@ -16,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,9 +22,11 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Operator-only provisioning.
  *
- * <p>Guarded by a bootstrap token from the environment, not by a tenant API key:
- * bootstrapping is a different trust boundary, and mixing the two would mean the
- * first tenant could mint more tenants.
+ * <p>Guarded by the operator boundary in {@code ConsoleSecurityConfig}, not by a
+ * tenant API key: bootstrapping is a different trust domain, and mixing the two
+ * would mean the first tenant could mint more tenants. A console session must have
+ * role {@code ADMIN}; a script may present the bootstrap token instead. Every
+ * method here is a non-GET, so the role matrix admits only {@code ADMIN}.
  */
 @RestController
 @RequestMapping("/v1/admin")
@@ -38,14 +38,10 @@ public class AdminController {
 
     private final TenantMapper tenantMapper;
     private final ApiKeyService apiKeyService;
-    private final BootstrapTokenGuard bootstrapTokenGuard;
 
-    public AdminController(TenantMapper tenantMapper,
-                           ApiKeyService apiKeyService,
-                           BootstrapTokenGuard bootstrapTokenGuard) {
+    public AdminController(TenantMapper tenantMapper, ApiKeyService apiKeyService) {
         this.tenantMapper = tenantMapper;
         this.apiKeyService = apiKeyService;
-        this.bootstrapTokenGuard = bootstrapTokenGuard;
     }
 
     @PostMapping("/tenants")
@@ -53,9 +49,7 @@ public class AdminController {
     @Operation(summary = "Create a tenant and issue its first API key")
     @Transactional
     public ProvisionTenantResponse provisionTenant(
-            @RequestHeader("X-Bootstrap-Token") String bootstrapToken,
             @RequestBody ProvisionTenantRequest request) {
-        bootstrapTokenGuard.verify(bootstrapToken);
         if (request.name() == null || request.name().isBlank() || request.name().length() > 64) {
             throw ApiException.invalid("name is required and must be at most 64 characters");
         }
@@ -93,9 +87,7 @@ public class AdminController {
     @PostMapping("/tenants/{tenantId}/keys")
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Issue an additional API key for an existing tenant")
-    public ProvisionTenantResponse issueKey(@RequestHeader("X-Bootstrap-Token") String bootstrapToken,
-                                            @PathVariable long tenantId) {
-        bootstrapTokenGuard.verify(bootstrapToken);
+    public ProvisionTenantResponse issueKey(@PathVariable long tenantId) {
         var tenant = tenantMapper.findById(tenantId)
                 .orElseThrow(() -> ApiException.notFound("Tenant"));
         ApiKeyService.IssuedKey key = apiKeyService.issue(tenantId, DEFAULT_SCOPES);
@@ -105,9 +97,7 @@ public class AdminController {
     @PostMapping("/keys/{apiKeyId}/revoke")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Operation(summary = "Revoke an API key")
-    public void revoke(@RequestHeader("X-Bootstrap-Token") String bootstrapToken,
-                       @PathVariable long apiKeyId) {
-        bootstrapTokenGuard.verify(bootstrapToken);
+    public void revoke(@PathVariable long apiKeyId) {
         apiKeyService.revoke(apiKeyId);
     }
 }

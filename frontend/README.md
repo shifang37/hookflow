@@ -15,19 +15,27 @@ npm install
 npm run dev                      # http://localhost:5173
 ```
 
-开发服务器把 `/v1` 和 `/actuator` 代理到 `localhost:8080`，所以前端代码里**没有 base URL**，
-也不需要为本地开发开 CORS。
+开发服务器把 `/v1`、`/api` 和 `/actuator` 代理到 `localhost:8080`，所以前端代码里
+**没有 base URL**，也不需要为本地开发开 CORS。
 
-首次打开会提示「尚未配置凭证」。点右上角「凭证」：
+首次打开会跳到登录页（生产 `/ui/login`，开发服务器 `/login`）。本地默认账号（**只用于演示**）：
 
-| 输入 | 用途 | 从哪来 |
-|---|---|---|
-| 租户 API Key（`hk_…`） | 事件流 / 投递页 | `POST /v1/admin/tenants` 的响应里 `apiKey` |
-| 运营令牌 | 租户 / 监控页 | `hookflow.admin.bootstrap-token`（默认 `hookflow-dev-bootstrap-token`） |
+| 账号 | 密码 | 角色 | 能做什么 |
+|---|---|---|---|
+| `admin` | `admin123` | `ADMIN` | 建租户、改策略、轮换 Key |
+| `viewer` | `viewer123` | `VIEWER` | 只读：列表、统计、监控 |
 
-两个凭证分别对应后端的两个信任域，UI 不会拿租户 Key 去调 `/v1/admin/**` —— 那是一条
-`403`，不是「权限不够的提示」。想预置默认值可以用 `.env.local`（见 `.env.example`），
-但注意 `VITE_` 变量会被打进 bundle。
+登录是服务端会话：密码 POST 到 `/api/auth/login`，服务端下发 `HttpOnly` 的
+`JSESSIONID`；前端不保存任何运营凭证。角色只决定**界面**显示什么，服务端在
+`/v1/admin/**` 上强制执行同一条矩阵。
+
+登录后右上角「凭证」只填**租户** API Key（`POST /v1/admin/tenants` 的响应里 `apiKey`），
+用于事件流 / 投递 / Endpoint 页面。这是和运营会话不同的信任域：租户 Key 只读得到本租户，
+不能跨租户。想预置默认租户 Key 可以用 `.env.local`（见 `.env.example`），但注意
+`VITE_` 变量会被打进 bundle。
+
+登录过期时，任何 `/v1/admin/**` 响应 401 都会触发 `SessionExpiryListener`，把会话缓存
+置为匿名并让 `RequireAuth` 跳回登录页；不会留下一屏「读取失败」。
 
 ## 生产构建
 
@@ -48,18 +56,20 @@ npm run build:backend
 ```
 src/
 ├── api/
-│   ├── client.ts     # axios 实例、两个信任域的请求头、统一 ApiError
+│   ├── client.ts     # axios 实例、租户请求头、CSRF 配置、统一 ApiError
+│   ├── session.ts    # 登录/退出/会话探测（服务端会话，不存运营凭证）
 │   ├── queries.ts    # React Query hooks + 轮询间隔（集中一处）
 │   ├── time.ts       # 时间与数字格式化（后端时间是 UTC 无时区）
-│   ├── auth.ts       # 凭证存取（localStorage 优先于构建时默认值）
+│   ├── auth.ts       # 租户 API Key 存取（localStorage 优先于构建时默认值）
 │   └── types.ts      # 手写的 wire 类型，逐个对应后端 DTO
 ├── components/       # 跨页组件 + 每页自己的抽屉/弹窗
-│   ├── AppShell.tsx / StatusTag.tsx / PageTitle.tsx / TokenDrawer.tsx
+│   ├── AppShell.tsx / RequireAuth.tsx / SessionExpiryListener.tsx
+│   ├── StatusTag.tsx / PageTitle.tsx / TokenDrawer.tsx
 │   ├── CredentialAlert.tsx / SecretRevealModal.tsx
 │   └── TenantDetailDrawer.tsx / TenantKeysCard.tsx / CreateTenantModal.tsx
 │       EventDetailDrawer.tsx / replayMessage.ts
-├── pages/            # 五个页面（租户页只留表格与头部动作）
-├── stores/uiStore.ts # 时间窗口、凭证抽屉
+├── pages/            # 五个业务页面 + LoginPage（唯一的公开路由）
+├── stores/uiStore.ts # 时间窗口、租户凭证抽屉
 ├── test/setup.ts     # jsdom 缺口（matchMedia、ResizeObserver、getComputedStyle）
 ├── test/tenantFixtures.ts    # 租户页三个测试文件共用的夹具与 mock 默认值
 ├── test/endpointFixtures.ts  # Endpoint 页三个测试文件共用

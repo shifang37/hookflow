@@ -39,7 +39,7 @@
 | 优化项 | 状态 | 验收 | 说明 |
 |---|---|---|---|
 | P0 前端可视化 | ✅ 完成 | 6/6 | 5 个页面、2s 轮询、图表、覆盖率达标；390×844 视口已验收（非真机） |
-| P0 管理后台 | 🟡 基本完成 | 3/5 | 主要 CRUD、租户停用、Endpoint 测试可在 UI 完成；无登录、租户硬删除、告警/设置 |
+| P0 管理后台 | 🟡 基本完成 | 4/5 | 主要 CRUD、租户停用、Endpoint 测试可在 UI 完成；已加登录/角色（ADMIN/VIEWER）；缺租户硬删除、告警/设置 |
 | P1 Java SDK | 🟢 已实现，未发布 | 5/6 | 66 测试、行覆盖 92.9%；未发布到 GitHub Packages / Maven Central |
 | P1 K8s 部署 | ✅ 已完成 | 5/5 | Helm chart、HPA、探针、优雅停机，kind 实测 |
 | P1 监控面板 | ✅ 已完成 | 4/4 | 3 个面板、2 条告警、compose `monitoring` profile |
@@ -339,12 +339,14 @@ cd frontend && npm run build
 
 ## P0：管理后台
 
-> **状态（2026-10-30）**：基本完成。租户、Endpoint、API Key、事件和监控都能在
+> **状态（2026-11-05）**：基本完成。租户、Endpoint、API Key、事件和监控都能在
 > [`frontend/`](../frontend/) 操作；读接口与租户策略更新在
 > [`AdminConsoleController.java`](../src/main/java/dev/hookflow/api/AdminConsoleController.java)，
 > 开通与 Key 轮换在 [`AdminController.java`](../src/main/java/dev/hookflow/api/AdminController.java)。
-> 租户停用/启用和 Endpoint 测试发送已支持；缺口：没有登录体系（用 Bootstrap Token +
-> 租户 API Key），刻意不做租户硬删除，告警阈值和系统设置页未做。
+> **登录与角色已加**：`/ui/login` 走 Spring Security 表单登录和服务端会话，
+> `ADMIN` 可读写、`VIEWER` 只读；公共 API 仍是手写 API Key（ADR-0007），
+> 机器调用仍可用 Bootstrap Token。缺口：刻意不做租户硬删除，告警阈值和系统设置页未做。
+> 认证/授权/会话的实现边界见 [ADR-0015](adr/0015-console-login-with-spring-security.md)。
 
 ### 立项时的现状问题（已解决）
 
@@ -638,7 +640,8 @@ export function TenantCreatePage() {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'X-Bootstrap-Token': 'hookflow-dev-bootstrap-token'  // 实际应走登录态
+          // 实际实现已走登录态 + CSRF cookie，见 ADR-0015
+          'X-Bootstrap-Token': 'hookflow-dev-bootstrap-token'
         },
         body: JSON.stringify(values)
       }).then(res => res.json()),
@@ -706,6 +709,10 @@ export function TenantCreatePage() {
 
 ### 鉴权方案
 
+> **实际实现（2026-11-05）**：方案 A，但账号来自 `hookflow.console.users`、密码在启动时
+> BCrypt 编码、会话带 CSRF 与 `ADMIN`/`VIEWER` 角色矩阵，Bootstrap Token 保留给脚本；
+> 见 [ADR-0015](adr/0015-console-login-with-spring-security.md)。下面是立项时的草案。
+
 管理后台需要登录保护，有两个方案：
 
 **方案 A：Spring Security + Session（简单）**
@@ -760,7 +767,7 @@ public class SecurityConfig {
 
 - [x] 至少 5 个页面：租户列表、租户详情、创建租户、Endpoint 管理、监控大盘（详情和创建是抽屉/弹窗，不是独立路由）
 - [ ] 所有 CRUD 操作可通过 UI 完成，无需 curl —— 现有资源均可增删改查；租户停用/启用和 Endpoint 测试已支持，但租户硬删除（刻意不做）、告警/设置没有做
-- [ ] 有基础的权限控制（需登录）—— 现在是 Bootstrap Token / 租户 API Key 鉴权，没有登录、账号和角色
+- [x] 有基础的权限控制（需登录）—— `/ui/login` 用 Spring Security 会话登录，`ADMIN` 读写、`VIEWER` 只读；实现与边界见 [ADR-0015](adr/0015-console-login-with-spring-security.md)
 - [x] 至少 1 个统计报表（租户级 + 系统级）
 - [x] 表单有客户端和服务端双重验证
 
