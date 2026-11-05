@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### 发布
+
+- **Java SDK 0.1.0 已发布到 GitHub Packages**：tag `sdk-v0.1.0` 触发 `sdk-publish.yml` 的 run #1，
+  `dev.hookflow:hookflow-java-sdk:0.1.0` 可供消费方按 `read:packages` 认证引用；坐标、仓库与
+  `settings.xml` 配置见 [sdk/java/README.md](sdk/java/README.md#8-发布状态与-github-packages)
+
 ### 修复
 
 - `scripts/drill.ps1`（D1–D3）不再在 demo 库留下 `drill-*` 租户：结束前逐表删除自己建的租户，`finally` 兜底受控中止，
@@ -117,7 +123,7 @@
   [remaining-plan.md §J.2](docs/remaining-plan.md)）
 - 接收方验签工具：时间戳窗口 + 常量时间比较；签名串与服务端 `HmacSigner` 逐字对齐，**顺手修正了文档里写错的签名串格式**
 - 66 个测试（JUnit 5 + MockWebServer），JaCoCo LINE 92.9%，`LINE >= 80%` 门槛 `haltOnFailure`；`sdk.yml` 在 `sdk/java/**` 变更时跑
-- 发布 workflow `sdk-publish.yml`（tag `sdk-v*` → GitHub Packages）已写好，**尚未实际发布**；当前只能 `mvn install` 后本地引用
+- 发布 workflow `sdk-publish.yml`（tag `sdk-v*` → GitHub Packages）已写好；2026-11-05 由 `sdk-v0.1.0` 首次发布，见 [Unreleased](#unreleased)
 
 ### 新增 — 监控（[monitoring.md](docs/monitoring.md)）
 
@@ -158,7 +164,7 @@
 
 ### 未完成 / 已知（不掩饰）
 
-- **Python SDK** 未开始（`sdk/python/` 不存在，只有 workflow 预置）；Java SDK 未发布到任何远程仓库
+- **Python SDK** 未开始（`sdk/python/` 不存在，只有 workflow 预置）；Java SDK 当时未发布到任何远程仓库（2026-11-05 已发布 0.1.0，见 [Unreleased](#unreleased)）
 - **A3 备份恢复演练**未做（唯一没覆盖的数据丢失场景）；**4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流**未开始
 - P3 的 2000 events/s 目标未达：当前 455–470 events/s，下一个瓶颈是 worker 的两次提交（[§20](docs/performance.md)）
 - Codecov 上传未验证（没有 `CODECOV_TOKEN`）；后端单测覆盖率有数字（LINE 28.3%，IT 不计）但没有门槛

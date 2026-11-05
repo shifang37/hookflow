@@ -403,7 +403,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
 | [sdk.yml](.github/workflows/sdk.yml) | `sdk/java/**` 变更 | Java SDK `mvn verify`（含 LINE ≥ 80% 门槛）+ javadoc | 已存在 |
-| [sdk-publish.yml](.github/workflows/sdk-publish.yml) | tag `sdk-v*` | `mvn deploy` 到 GitHub Packages | 已存在，**尚未实际发布** |
+| [sdk-publish.yml](.github/workflows/sdk-publish.yml) | tag `sdk-v*` | `mvn deploy` 到 GitHub Packages | **已验证**：tag `sdk-v0.1.0` 的 run #1 成功，`dev.hookflow:hookflow-java-sdk:0.1.0` 已发布；消费方需 `read:packages` token（[SDK README §8](sdk/java/README.md#8-发布状态与-github-packages)） |
 | [python-sdk.yml](.github/workflows/python-sdk.yml) | `sdk/python/**` 变更 | mypy + pytest + coverage | **预置**：`sdk/python/` 还不存在，路径过滤使它现在不会运行；首次添加时它曾因 workflow 文件自身触发而失败一次（没有 `sdk/python`），已把自身从触发路径移除；`helm-v0.1.0` tag 又误触发过一次（GitHub 对 tag push 不评估 paths），已加 `branches: ['**']`，任务 P 落地后由 `sdk/python/**` 自动生效 |
 
 **覆盖率**：`./mvnw -Pcoverage test` 只对单测插桩（IT 不采集，理由见 `pom.xml` 里 profile 的注释），
@@ -569,7 +569,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 **当前限制（不掩饰）**：
 
 - 单 region、单 MySQL 主库，没有分片
-- Python SDK 未提供；**Java SDK** 在 [`sdk/java/`](sdk/java/README.md)（独立的 Maven 项目，`mvn install` 后即可引用）
+- Python SDK 未提供；**Java SDK 0.1.0 已发布到 GitHub Packages**：`dev.hookflow:hookflow-java-sdk:0.1.0`（源码与接入示例在 [`sdk/java/`](sdk/java/README.md)）
 - 运营控制台（`/ui/`，源码在 `frontend/`）已覆盖租户开通/停用/启用、API Key 轮换、Endpoint
   增删改查（含软删除）与测试发送、事件详情（payload + 扇出投递）、投递详情（attempt 历史）、
   单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」除刻意不做的租户硬删除外已齐；
@@ -592,7 +592,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
 | v0.2 | 故障注入自动化、jqwik 属性测试、SSRF 防护、outbox 保留策略、三次真实演练 | ✅ 已完成 |
 | v0.3 | 多租户公平调度、背压与降载、开环延迟测量 + JVM 证据、容量模型、OpenTelemetry trace 贯通 | ✅ 已完成（见 [v0.3 清单](docs/v0.3-checklist.md)） |
 | v0.3.1 | 演示控制台：模拟业务系统 + 可点面板（`/demo/`），五个场景覆盖投递/重试/公平性/背压 | ✅ 已完成（见 [demo.md](docs/demo.md)；没有单独打 tag，随 v0.4.0 发布） |
-| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；吞吐 41 → 455–470 events/s ✅（B0–B8，[performance.md](docs/performance.md)）；运营控制台 `/ui/` ✅（[`frontend/`](frontend/README.md)，87 个测试）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；CI/CD 发布链 ✅（GHCR 镜像、Helm OCI 已验证）。未开始、转入后续版本：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流、Python SDK | ✅ 已发布：tag `v0.4.0`（2026-11-03，[CHANGELOG](CHANGELOG.md)） |
+| v0.4 | 第 1 轮 ✅：`delivery_attempt` 保留策略、批量提交 `/v1/events/batch`、锁冲突重试收敛（commit `879ccc7`）；吞吐 41 → 455–470 events/s ✅（B0–B8，[performance.md](docs/performance.md)）；运营控制台 `/ui/` ✅（[`frontend/`](frontend/README.md)，87 个测试）；Java SDK ✅（[`sdk/java/`](sdk/java/README.md)，66 个测试，LINE 92.9%，`sdk-v0.1.0` 已发布到 GitHub Packages）；Grafana 面板 + 告警 ✅（[monitoring.md](docs/monitoring.md)）；Helm chart ✅（[`helm/hookflow/`](helm/hookflow/README.md)，kind 实测）；CI/CD 发布链 ✅（GHCR 镜像、Helm OCI 已验证）。未开始、转入后续版本：4C8G 真机基线、传输层 SPI + Kafka、令牌桶限流、Python SDK | ✅ 已发布：tag `v0.4.0`（2026-11-03，[CHANGELOG](CHANGELOG.md)） |
 
 **后续工作与优化计划**：[docs/remaining-plan.md](docs/remaining-plan.md)（任务拆解与验收标准，顺序 P → H）与 [docs/next-steps.md](docs/next-steps.md)（当前基线与环境坑）。
 两份都是给「下一个接手的人」看的，能独立读；[docs/v0.4-plan.md](docs/v0.4-plan.md) 保留 v0.4 的 backlog 原文，其基线数字已过期。

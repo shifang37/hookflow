@@ -5,7 +5,7 @@ HookFlow 的官方 Java 客户端：发送单条 / 批量事件，并在**接收
 - 要求 **Java 17+**（与服务端的 Java 21 无关；客户端不必跟着升级）
 - 依赖：OkHttp 4.12、Jackson 2.17（**不是**服务端用的 Jackson 3）
 - 产物：`dev.hookflow:hookflow-java-sdk:0.1.0`
-- 当前状态：`mvn install` 已验证；GitHub Packages 的发布 workflow 已写好，但**尚未真正发布**（本版本暂无远程仓库可用，见 §8）
+- 当前状态：**已发布** `dev.hookflow:hookflow-java-sdk:0.1.0` 到 GitHub Packages（tag `sdk-v0.1.0`，2026-11-05，workflow run #1 成功）；接入方式见 §8
 
 ---
 
@@ -13,15 +13,26 @@ HookFlow 的官方 Java 客户端：发送单条 / 批量事件，并在**接收
 
 ### 1.1 添加依赖
 
-本地仓库（`mvn install` 之后）：
+发布版在 GitHub Packages。先按 §8 配置 `~/.m2/settings.xml` 的 `github` server（需要 `read:packages` 的 token），再在项目的 `pom.xml` 里加仓库与依赖：
 
 ```xml
-<dependency>
-    <groupId>dev.hookflow</groupId>
-    <artifactId>hookflow-java-sdk</artifactId>
-    <version>0.1.0</version>
-</dependency>
+<repositories>
+    <repository>
+        <id>github</id>
+        <url>https://maven.pkg.github.com/shifang37/hookflow</url>
+    </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>dev.hookflow</groupId>
+        <artifactId>hookflow-java-sdk</artifactId>
+        <version>0.1.0</version>
+    </dependency>
+</dependencies>
 ```
+
+本地开发版（在本仓库执行 `.\mvnw.cmd -f sdk/java/pom.xml install` 之后）用同样的坐标，从本地仓库解析。
 
 ### 1.2 发一条事件
 
@@ -329,19 +340,19 @@ $env:HOOKFLOW_WEBHOOK_SECRET = 'the secret shown when the endpoint was created'
 
 ## 8. 发布状态与 GitHub Packages
 
-**没有发布到 Maven Central，也还没有实际 deploy 到 GitHub Packages。** 原因：前者需要
-Sonatype 账号，后者需要仓库 token；两者都不是 SDK 代码能单方面完成的。本次只验证了
-`mvn install` 与"独立项目依赖本地 jar 跑通 sendEvent"。
+**已发布到 GitHub Packages：`dev.hookflow:hookflow-java-sdk:0.1.0`**（tag `sdk-v0.1.0`，2026-11-05，
+[`sdk-publish.yml`](../../.github/workflows/sdk-publish.yml) run #1 成功）。**没有发布到 Maven Central**——
+那需要 Sonatype 账号与签名，暂不在计划里。
 
-发布 workflow（tag 触发）在 `.github/workflows/sdk-publish.yml`：
+发布由 tag 触发：workflow 用 `GITHUB_TOKEN`（`packages: write`）执行 `mvn deploy` 到
+`https://maven.pkg.github.com/shifang37/hookflow`。发布入口：
 
 ```powershell
 git tag sdk-v0.1.0
 git push origin sdk-v0.1.0
 ```
 
-它会用 `GITHUB_TOKEN`（`packages: write`）执行 `mvn deploy` 到
-`https://maven.pkg.github.com/shifang37/hookflow`。发布成功后，使用方这样引用：
+使用方在 `pom.xml` 里加仓库（依赖坐标见 §1.1）：
 
 ```xml
 <repositories>
@@ -364,7 +375,8 @@ git push origin sdk-v0.1.0
 </servers>
 ```
 
-在发布之前，替代方案就是 §7 的 `mvn install`，然后按 §1.1 在本地引用。
+> GitHub Packages 的 Maven registry 即使对公开包也要求认证，所以消费方必须配这段 server。
+> 没有 token 时退回 §7 的 `mvn install`，按 §1.1 从本地仓库引用。
 
 未来的更简单路径：把 `sdk/java` 拆成独立仓库（`shifang37/hookflow-java-sdk`），
 JitPack 一条 tag 即可发布——那是仓库侧的操作，不影响本目录的代码。
