@@ -31,6 +31,8 @@
   轮询预算、缓存键、`enabled` 门控、`keepPreviousData` 与每个 mutation 的失效路径；`queries.ts` 覆盖率 24% → 100%
 - 后端新增 `EventIngestRetryTest`：死锁时 ingest 重试整个事务、第二次只创建一个事件，并断言
   `hookflow.db.lock_conflict{operation=event.ingest}` 计数为 1；单测总数 174 → **175**，LINE 覆盖率 28.3% → **29.1%**
+- **Codecov 上传已启用并验证**：配置 `CODECOV_TOKEN` 后，2026-11-05 的 `ci` run 上传 `target/site/jacoco/jacoco.xml` 成功；
+  Codecov 提交报告 LINE **26.93%**（763/2833，61 条 partial 未计入），与 JaCoCo 的 29.1% 差异来自 partial 行的口径
 
 ## [0.4.0] — 2026-11-03
 

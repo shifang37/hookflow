@@ -30,7 +30,7 @@ HookFlow 原本是一个**生产级后端**（141 测试、14 条 ADR、故障�
 | 前端覆盖率 | 语句 85.31% / 分支 75.39% / 函数 80.87% / 行 84.86%，~63s（Vitest 4 的 V8 口径，比 3.x 更严格）；`queries.ts` 四项均 100% | `npm run test:coverage` |
 | Java SDK | **66 个通过**，JaCoCo LINE **92.9%** | `./mvnw -f sdk/java/pom.xml verify` |
 | Helm chart | dev/prod `helm lint` 0 failed | `helm lint helm/hookflow -f helm/hookflow/values-dev.yaml` |
-| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #20 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；**未验证**：Codecov 上传 | `.github/workflows/` |
+| CI/CD workflow | `ci` / `docker` / `helm` / `helm-publish` / `sdk` / `sdk-publish` 已就绪，`python-sdk` 预置；**已验证**：`docker` run #1 推送 GHCR、`ci` run #20 绿、`helm-publish` 的 `helm-v0.1.0` run #1 推送 OCI chart 成功；Codecov 上传也已验证（2026-11-05，`CODECOV_TOKEN`） | `.github/workflows/` |
 | 类型 / 静态检查 | `tsc --noEmit`、`eslint` 均干净 | `npm run typecheck && npm run lint` |
 | 前端生产构建 | 通过，app chunk ≈ 57 kB（vendor 已拆分） | `npm run build:backend` |
 
@@ -273,7 +273,7 @@ hook），整包函数覆盖 49.7% → **61.2%**。
 | P1 Java SDK | ✅ [`sdk/java/`](../sdk/java/README.md)：独立 Maven 项目，66 个测试、JaCoCo LINE **92.9%**，`mvn install` 与外部项目引用已验证；GitHub Packages 已发布 `dev.hookflow:hookflow-java-sdk:0.1.0`（tag `sdk-v0.1.0`，run #1 成功） |
 | P1 K8s / Helm | ✅ [`helm/hookflow/`](../helm/hookflow/)：三角色 Deployment、Service/Ingress、探针、75s 优雅停机、HPA/PDB；kind 实测滚动更新 0 丢失、杀 worker 后 lease 重投、HPA 1→3 |
 | P1 Grafana 面板 | ✅ 3 个面板 + 2 条告警 + `monitoring` compose profile；两个指标缺口已补，死信告警实测触发，见 [monitoring.md](monitoring.md) |
-| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR、ci run #20 绿、helm-v0.1.0 发布 chart 成功；前端 exit 1 已修复（Vitest 4 + AppShell 60s）；**未验证**：Codecov 上传（没有 token） |
+| P2 CI/CD | ✅ workflow 就绪：`ci.yml` 增加 JaCoCo + Codecov 步骤（无 token 时跳过并打印原因），`docker.yml`（master/tag `v*` → GHCR）、`helm-publish.yml`（tag `helm-v*` → OCI）、`python-sdk.yml` 预置，README 换实时徽章。**已验证**：docker run #1 推送 GHCR、ci run #20 绿、helm-v0.1.0 发布 chart 成功；前端 exit 1 已修复（Vitest 4 + AppShell 60s）；**已验证**：Codecov 上传（2026-11-05，覆盖率 26.93%） |
 | P2 Python SDK | 没有 |
 | P3 性能优化（500 → 2000 events/s） | 没有 |
 
@@ -398,8 +398,8 @@ ae43506 feat: operator console - admin read API and a React UI
    [README 的 CI/CD 一节](../README.md#cicd每次-push-自动跑什么) 和 `.github/workflows/`。
    剩余工作按 [remaining-plan.md](remaining-plan.md)：**U（控制台小缺口）→ P（Python SDK）→
    H（P3 性能）**。C 的验证边界：GHCR 镜像已在 `docker` run #1 推送成功、`ci` run #20 绿、
-   `helm-v0.1.0` 已发布到 `oci://ghcr.io/shifang37/charts`；**没有验证**的只剩 Codecov 上传
-   （仓库没有 `CODECOV_TOKEN`，步骤会跳过并打印原因）。`python-sdk.yml` 只是预置，
+   `helm-v0.1.0` 已发布到 `oci://ghcr.io/shifang37/charts`；Codecov 上传也已验证
+   （2026-11-05 配置 `CODECOV_TOKEN`，覆盖率 26.93%）。`python-sdk.yml` 只是预置，
    `sdk/python/` 还不存在。
 10. ~~本地质量债：`queries.ts` 的 hook 覆盖 24%~~ —— 已完成（2026-11-04）：新增
     `frontend/src/api/queries.test.tsx`（26 个用例，`renderHook` + 真实 `QueryClient`），`queries.ts` 的语句 / 分支 /

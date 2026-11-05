@@ -6,6 +6,7 @@
 [![Docker](https://github.com/shifang37/hookflow/actions/workflows/docker.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/docker.yml)
 [![Helm](https://github.com/shifang37/hookflow/actions/workflows/helm.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/helm.yml)
 [![Java SDK](https://github.com/shifang37/hookflow/actions/workflows/sdk.yml/badge.svg?branch=master)](https://github.com/shifang37/hookflow/actions/workflows/sdk.yml)
+[![codecov](https://codecov.io/gh/shifang37/hookflow/branch/master/graph/badge.svg)](https://app.codecov.io/gh/shifang37/hookflow)
 ![Java](https://img.shields.io/badge/Java-21-ED8B00)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F)
 ![MySQL](https://img.shields.io/badge/MySQL-8.4-4479A1)
@@ -398,7 +399,7 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 
 | workflow | 触发 | 做什么 | 状态 |
 |---|---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 175 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过；三处 IT flake 的根因已于 2026-11-04 修复，见 [CHANGELOG](CHANGELOG.md)）；Codecov 步骤**按设计跳过**（没有 token）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
+| [ci.yml](.github/workflows/ci.yml) | push `master`/`main`、所有 PR | 175 个单测、带 JaCoCo 的单测（`-Pcoverage`）、`verify`（73 个 Testcontainers IT）、package；前端 typecheck / lint / test / build | **run #22 绿**（run #20 的 build 曾因 `BatchReplayIT.cleanUp` 的 FK/并发 flake 失败，`gh run rerun --failed` 后通过；三处 IT flake 的根因已于 2026-11-04 修复，见 [CHANGELOG](CHANGELOG.md)）；Codecov 上传**已验证**（2026-11-05 配置 `CODECOV_TOKEN` 后上传成功）。前端曾经的 exit 1 是 Vitest 3 的 `onTaskUpdate` unhandled error，已升级 Vitest 4.1.12 |
 | [docker.yml](.github/workflows/docker.yml) | push `master`、tag `v*` | 先 `npm ci && npm run build:backend`（Dockerfile 不跑 npm），再用 buildx 推 `ghcr.io/shifang37/hookflow`：`sha-<短>`、master 的 `latest`、tag 名 | **已在 run #1 验证**：前端构建、buildx 构建、GHCR 推送全部成功；本机 `docker build` 仍卡在容器内 Maven 下载（未完成），但不影响 CI 结果 |
 | [helm.yml](.github/workflows/helm.yml) | `helm/**`、`deploy/kind/**` 变更 | `helm lint`（dev/prod）+ `helm template` | 本机 lint 通过 |
 | [helm-publish.yml](.github/workflows/helm-publish.yml) | tag `helm-v*` | `helm package --version <tag>` 后推 `oci://ghcr.io/shifang37/charts` | **已验证**：tag `helm-v0.1.0` 的 run #1 成功；`helm show chart oci://ghcr.io/shifang37/charts/hookflow --version 0.1.0` 匿名可拉取（digest `sha256:043e…`） |
@@ -410,7 +411,8 @@ curl -s -X POST localhost:8080/v1/deliveries/2/replay -H "Authorization: Bearer 
 175 个测试的 **LINE 29.1%**（824/2833，另有 BRANCH 28.4%），报告在 `target/site/jacoco/`。同一 profile 里的
 `jacoco:check` 把这条基线设成防回退线：LINE 低于 **28%** 时构建立即失败（SDK 自己的 80% 门禁不受影响）。
 这是**单测的覆盖率，不是全项目覆盖率**——`verify` 里的 73 个 IT 覆盖的路径不计入，所以不要拿它
-和 SDK 的 92.9%（SDK 自己的测试）比较。
+和 SDK 的 92.9%（SDK 自己的测试）比较。Codecov 上同一份 `jacoco.xml` 显示 **26.93%**（763/2833，61 条 partial 行不计为 covered）；
+和 JaCoCo 的 29.1% 差在「partial 行算不算覆盖」，不是报告不一致。
 
 三种发布 tag 互不匹配：镜像 `v*`、Helm `helm-v*`、SDK `sdk-v*`，各 workflow 顶部注释写了原因。
 徽章只有在对应 workflow 至少跑过一次后才会变绿，刚推送时显示 "no status"。
@@ -575,7 +577,7 @@ api  http.server.requests  →  relay hookflow.publish  →  worker hookflow.del
   单条与批量重放死信、监控——路线图 P0「所有 CRUD 通过 UI 完成」除刻意不做的租户硬删除外已齐；
   K8s/Helm 已就绪（[`helm/hookflow/`](helm/hookflow/README.md)），Prometheus + Grafana
   监控已就绪（[docs/monitoring.md](docs/monitoring.md)）；CI/CD 流水线已就绪（见上文，
-  **GHCR 镜像和 Helm OCI chart 都已实际验证；Codecov 上传仍未验证**）；剩余的是 Python SDK 和 P3 性能
+  **GHCR 镜像、Helm OCI chart 和 Codecov 上传都已实际验证**）；剩余的是 Python SDK 和 P3 性能
 - 顺序投递未实现（明确列为「不保证」；v0.3 的公平调度也没有改变这一点）
 - 每租户限流是固定窗口，不是令牌桶（窗口边界可 2 倍突刺）
 - SSRF 防护在**创建 endpoint 时**检查一次，投递时会重新解析域名，DNS rebinding 可绕过（需要固定解析结果，与 LB/TLS SNI 交互，排到后续版本）
